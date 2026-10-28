@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import type { FreshnessReport } from "../daemon/freshness.ts";
 import { resolveExecutable } from "../platform.ts";
 import { LspClient, type WatchedFileChange } from "./client.ts";
-import { CSHARP_LS, TYPESCRIPT_LS } from "./servers.ts";
+import { serverCommand } from "./servers.ts";
 import type { ServerRecord } from "../daemon/state.ts";
 import type { SyntaxIndex } from "../index/index.ts";
 import type { ToolLanguage } from "../index/symbols.ts";
@@ -20,12 +20,6 @@ export const SERVER_NAMES: Record<Owner, string> = {
   rust: "rust-analyzer",
 };
 
-const EXECUTABLE_ENV: Record<Owner, string> = {
-  csharp: "CODE_NAV_CSHARP_LS",
-  typescript: "CODE_NAV_TYPESCRIPT_LS",
-  rust: "CODE_NAV_RUST_ANALYZER",
-};
-const RUST_ANALYZER = "rust-analyzer";
 const REQUEST_TIMEOUT_MS = 120_000;
 const SOLUTION_LOAD_TIMEOUT_MS = 600_000;
 const STOP_GRACE_MS = 1_500;
@@ -82,9 +76,7 @@ export interface Acquired {
 }
 
 function executable(owner: Owner): string {
-  const override = process.env[EXECUTABLE_ENV[owner]];
-  if (override !== undefined && override !== "") return override;
-  return owner === "csharp" ? CSHARP_LS : owner === "typescript" ? TYPESCRIPT_LS : RUST_ANALYZER;
+  return serverCommand(owner);
 }
 
 function depth(path: string): number {

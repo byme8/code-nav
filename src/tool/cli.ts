@@ -4,6 +4,7 @@ import { ensureDaemon, request, status, stop } from "./daemon/lifecycle.ts";
 import { runDaemon } from "./daemon/server.ts";
 import { resolveRoot } from "./daemon/state.ts";
 import { install } from "./install.ts";
+import { doctor } from "./doctor.ts";
 
 const USAGE = [
   "usage: code-nav [--root <dir>] <command> …",
@@ -15,6 +16,7 @@ const USAGE = [
   "  trace [--schema <path>] <path>:<line>:<col> | <path>:<line> <name> | <Type.Property>",
   "  status | stop",
   "  install rust-src",
+  "  doctor",
 ];
 
 const output: string[] = [];
@@ -46,6 +48,7 @@ async function main(argv: string[]): Promise<number> {
     return command === undefined ? EXIT.error : EXIT.success;
   }
   if (command === "install") return await install(args.slice(1), write);
+  if (command === "doctor") return doctor(args.slice(1), write);
   let root: string;
   try {
     root = resolveRoot(rootOption, process.cwd());

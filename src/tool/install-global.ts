@@ -5,19 +5,13 @@ import { fileURLToPath } from "node:url";
 import { compileTool } from "./compile.ts";
 import { stop } from "./daemon/lifecycle.ts";
 import { TOOL_VERSION } from "./daemon/state.ts";
-import { wgslLibraryPath } from "./index/wgsl.ts";
+import { diagnose } from "./doctor.ts";
 import { EXE_SUFFIX, IS_WINDOWS } from "./platform.ts";
 
 export const PERMISSION = "Bash(code-nav:*)";
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const NOTE = join(REPO_ROOT, "prompts", "navigation-tool-note.md");
 const USAGE = "usage: bun src/tool/install-global.ts [--bin-dir <dir>] [--claude-home <dir>]";
-
-const OPTIONAL_SERVERS: [command: string, languages: string][] = [
-  ["csharp-ls", "C#"],
-  ["typescript-language-server", "TypeScript"],
-  ["rust-analyzer", "Rust"],
-];
 
 const SKILL_FRONT_MATTER = `---
 name: code-nav
@@ -204,16 +198,6 @@ function gitCommit(): string | null {
   return proc.exitCode === 0 ? proc.stdout.toString().trim() : null;
 }
 
-function missingOptional(): string[] {
-  const missing: string[] = [];
-  for (const [command, language] of OPTIONAL_SERVERS) {
-    if (Bun.which(command) === null) missing.push(`${command} (${language} refs/def/impls/callers answer error:)`);
-  }
-  const grammar = wgslLibraryPath();
-  if (!existsSync(grammar)) missing.push(`WGSL grammar ${grammar} (build it with \`bun src/tool/grammars.ts\`)`);
-  return missing;
-}
-
 function parseArgs(argv: string[]): { binDir: string; claudeHome: string } | null {
   let binDir = join(homedir(), ".local", "bin");
   let claudeHome = join(homedir(), ".claude");
@@ -233,8 +217,9 @@ async function main(): Promise<number> {
     console.error(USAGE);
     return 2;
   }
-  if (Bun.which("ast-grep") === null) {
-    console.error("error: ast-grep is not on PATH; code-nav needs it for every command. Nothing was installed.");
+  const report = diagnose();
+  if (report.astGrep.found === null) {
+    console.error(`error: ast-grep unusable (${report.astGrep.hint}); code-nav needs it for every command. Nothing was installed.`);
     return 1;
   }
 
@@ -265,8 +250,7 @@ async function main(): Promise<number> {
   const daemons = stoppedBeforeReplace + (await stopAllDaemons());
   console.log(`daemons: ${daemons} stopped`);
 
-  const missing = missingOptional();
-  console.log(missing.length === 0 ? "optional dependencies: all present" : `optional dependencies missing: ${missing.join("; ")}`);
+  console.log(`languages: ${report.languages.map((l) => l.summary).join("; ")} (\`code-nav doctor\` for install hints)`);
   return permission.ok ? 0 : 1;
 }
 

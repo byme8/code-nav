@@ -36,4 +36,4 @@ current files on every call.
 
 Exit status: 0 answer; 1 `not found: …`; 2 `ambiguous: …` followed by one candidate per line
 (pick one and call again with its position); 3 `error: …` (for example a language server that is
-not available). Output is never truncated: prefer one precise command over broad ones.
+not available; `code-nav doctor` shows which languages this machine can serve). Output is never truncated: prefer one precise command over broad ones.

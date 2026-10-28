@@ -49,7 +49,7 @@ no WGSL language server.
 and `~/.claude`), run from this checkout, installs the tool for every Claude Code session on the
 machine; re-running it is how the installed tool is updated after a change here. In order:
 
-- Fails up front, installing nothing, if `ast-grep` is not on `PATH`.
+- Fails up front, installing nothing, if `ast-grep` is not usable (§`doctor`).
 - Compiles with `compileTool` into `<bin-dir>/.code-nav.install-<pid>.tmp` and renames it over
   `<bin-dir>/code-nav`, never rewriting the existing executable in place (macOS kills a signed
   executable whose file was rewritten in place, exit 137). A failed build removes the temp file,
@@ -67,9 +67,8 @@ machine; re-running it is how the installed tool is updated after a change here.
   recorded root, as `code-nav stop` does), so the next call starts the new binary.
 - Prints one line per piece: `binary: <path> (version <TOOL_VERSION>, commit <sha>)`,
   `skill: <path>`, `permission: … added | already present | not added …`, `daemons: <n> stopped`,
-  and `optional dependencies: all present` or the missing ones (csharp-ls,
-  typescript-language-server, rust-analyzer, the WGSL grammar library); a missing one only means
-  that language's commands answer `error: …`.
+  and `languages: <summary>; …` — the per-language summary lines of `code-nav doctor`; a language
+  short of a dependency only has its commands answer `error: …`.
 
 Running it twice leaves the same files and reports the permission as already present.
 `test/install-global.test.ts` runs it against temp directories with `TMPDIR` pointed at a temp
@@ -102,6 +101,7 @@ directory, so it only ever sees and stops the daemon it started.
 | No request for 30 minutes (`CODE_NAV_IDLE_MS` overrides) | The daemon exits and removes its state dir |
 | `code-nav stop` | The daemon answers `daemon stopped`, exits and removes its state dir; the CLI waits for the PID to end (SIGKILL to the group after 5 s). Unresponsive daemon: killed by PID group, `daemon <pid> killed (<reason>)`. None: `no daemon running`. Always exit 0 |
 | `code-nav status` | Never starts a daemon. Prints PID, root, version, files indexed, uptime, idle limit and the last freshness scan; `not found: no daemon running for <root>` (exit 1) when there is none |
+| `code-nav doctor` | Never starts a daemon and needs no tree; checks the machine's dependencies per language (§`doctor`) |
 | Two working trees | Two state dirs, two daemons; each walks only its own root |
 | An exception while answering | `error: <message>`, exit 3; the daemon keeps running |
 
@@ -550,6 +550,36 @@ dependencies alone (Homebrew's partial source, `CARGO_HOME=data/cargo-home`) alr
   dir and its size, the dependency step, and the `cargo.sysrootSrc` path rust-analyzer gets from its
   next start. Exit 0, or 3 with `error: …`; any other target exits 3 with
   `error: usage: code-nav install rust-src`.
+
+### `doctor`
+
+`code-nav doctor` (`src/tool/doctor.ts`) runs in the CLI process only — no daemon, no tree,
+`--root` ignored, no network — and reports which languages this machine can serve. There is no
+configuration: each language is usable or not on its own, from what is installed.
+
+- Lines: `ok <what> <resolved path>` or `missing <what>: <install hint>`, first the shared
+  `ast-grep` (with its `--version`), then per language its checks followed by
+  `<language>: ready | syntax only (<missing>) | unavailable (<missing>)`. A missing check that
+  costs only one feature leaves the language `ready (<feature lost>: <missing>)`.
+- Checks, in order: C# `csharp-ls`, `dotnet`; TypeScript `typescript-language-server`; GraphQL
+  `typescript-language-server` (only `trace` needs it: `ready (no trace: …)`); CSS
+  `vscode-css-language-server`; SCSS `scss-grammar`, `vscode-css-language-server`; Rust
+  `rust-analyzer`, `cargo`, `rust-src` (missing: `ready (std not indexed: rust-src missing)`);
+  WGSL `wgsl-grammar`. Without ast-grep every language is `unavailable (ast-grep missing)`; a
+  missing grammar makes its language unavailable; a missing language server or `dotnet` / `cargo`
+  makes it `syntax only`.
+- Resolution is the daemon's: `astGrepExecutable()` (on Windows a `.cmd` shim is reported with its
+  message), the server commands and `CODE_NAV_CSHARP_LS` / `CODE_NAV_TYPESCRIPT_LS` /
+  `CODE_NAV_RUST_ANALYZER` / `CODE_NAV_CSS_LS` overrides from `src/tool/lsp/servers.ts`, the grammar
+  paths `wgslLibraryPath()` / `scssLibraryPath()` (`CODE_NAV_WGSL_GRAMMAR` / `CODE_NAV_SCSS_GRAMMAR`),
+  and for `rust-src` the source rust-analyzer would get (`CODE_NAV_RUST_SRC`, the code-nav cache for
+  the current `rustc`, else `<rustc --print sysroot>/lib/rustlib/src/rust/library`). A set override
+  that does not resolve is named in the hint.
+- Hints follow `process.platform` (ast-grep: `brew` on macOS; `cargo install ast-grep --locked`,
+  `scoop` or `winget` on Windows); a grammar's hint is `bun <absolute path of the package's
+  src/tool/grammars.ts>`, which needs `git` and `clang`.
+- Exit 0 when ast-grep is usable, whatever the languages; 1 when it is not; 3 with arguments.
+  `install-global.ts` uses the same checks (`diagnose()`).
 
 ### WGSL demo
 
