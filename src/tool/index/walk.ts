@@ -16,6 +16,8 @@ export function sourceLanguage(path: string): ToolLanguage | null {
   if (/\.(?:graphql|gql)$/.test(path)) return "graphql";
   if (path.endsWith(".rs")) return "rust";
   if (path.endsWith(".wgsl")) return "wgsl";
+  if (path.endsWith(".css")) return "css";
+  if (path.endsWith(".scss")) return "scss";
   return null;
 }
 

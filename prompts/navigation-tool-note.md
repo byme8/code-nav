@@ -8,7 +8,7 @@ server may print `waited <s> s for <server>` first. Later commands are fast.
 Commands (`<pos>` is `<path>:<line>:<col>`, or `<path>:<line> <name>`, or a bare `<name>` /
 `<Owner.name>` looked up among declarations):
 
-- `find [--target file|member] [--lang csharp|typescript|graphql|rust|wgsl] [--kind K] <words…>`
+- `find [--target file|member] [--lang csharp|typescript|graphql|rust|wgsl|css|scss] [--kind K] <words…>`
   — symbol search by declared names, never file contents. `--target file` (default) ranks files by
   their path and their top-level types/declarations: `<path>  <score>  <matched terms>`. Use
   `--target member` when looking for a method, property, field or nested type:
@@ -30,7 +30,10 @@ Commands (`<pos>` is `<path>:<line>:<col>`, or `<path>:<line> <name>`, or a bare
 C# and TypeScript `refs`/`def`/`impls`/`callers` come from csharp-ls and
 typescript-language-server, Rust's from rust-analyzer; GraphQL `refs`/`def` from the schema and
 documents; `find`, `outline` and `show` from syntax trees. WGSL has only `find`/`outline`/`show`
-and answers `error:` for the rest. Rust standard-library items resolve only after
+and answers `error:` for the rest. CSS and SCSS outline rules (named by their selector), custom
+properties, `$variables`, mixins, functions, `%placeholders` and keyframes; their `refs`/`def` come
+from vscode-css-language-server and stay inside the position's own file (the answer says so), so
+search other files with `rg`; `impls`/`callers` answer `error:`. Rust standard-library items resolve only after
 `code-nav install rust-src` (one-time download into the user cache). The tool answers from the
 current files on every call.
 

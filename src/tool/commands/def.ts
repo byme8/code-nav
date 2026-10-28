@@ -1,4 +1,4 @@
-import { LineTexts, ask } from "../lsp/answer.ts";
+import { LineTexts, ask, styleScopeNote } from "../lsp/answer.ts";
 import { graphqlDefinition } from "../graphql/answer.ts";
 import { locateRootSchema, schemaOf, takeSchemaOption } from "../graphql/schema.ts";
 import { notFound, prefixed, success } from "../output.ts";
@@ -19,7 +19,7 @@ export const def: Command = {
     const location = result.find((l) => l.insideRoot);
     if (location === undefined) {
       const outside = result[0] === undefined ? "" : ` inside the root (the server answered ${result[0].path})`;
-      return prefixed(waited, notFound(`definition of ${describePosition(position)}${outside}`));
+      return prefixed([...waited, ...styleScopeNote(position, "definitions")], notFound(`definition of ${describePosition(position)}${outside}`));
     }
     const texts = new LineTexts(ctx.root);
     return success([...waited, `${location.path}:${location.line}:${location.column}  ${texts.text(location.path, location.line)}`]);

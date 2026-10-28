@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseSyntaxFiles, parseWgslFiles } from "./astgrep.ts";
+import { parseScssFiles, parseSyntaxFiles, parseWgslFiles } from "./astgrep.ts";
 import { parseGraphql } from "./graphql.ts";
+import { scssGrammarProblem, scssLibraryPath } from "./scss.ts";
 import type { IndexedFile, ToolLanguage, ToolSymbol } from "./symbols.ts";
 import { fileTerms } from "./terms.ts";
 import { sourceLanguage, type FileStamp } from "./walk.ts";
@@ -12,53 +13,92 @@ export interface Located {
   symbol: ToolSymbol;
 }
 
+export type GrammarLanguage = "wgsl" | "scss";
+
+interface CustomGrammar {
+  label: string;
+  problem: () => string | null;
+  library: () => string;
+  parse: (root: string, paths: string[], library: string) => Promise<Map<string, ToolSymbol[]>>;
+}
+
+const GRAMMARS: Record<GrammarLanguage, CustomGrammar> = {
+  wgsl: { label: "WGSL", problem: wgslGrammarProblem, library: wgslLibraryPath, parse: parseWgslFiles },
+  scss: { label: "SCSS", problem: scssGrammarProblem, library: scssLibraryPath, parse: parseScssFiles },
+};
+
+export function isGrammarLanguage(language: ToolLanguage | null): language is GrammarLanguage {
+  return language === "wgsl" || language === "scss";
+}
+
+class GrammarState {
+  readonly pending = new Set<string>();
+  scanError: string | null = null;
+
+  constructor(readonly grammar: CustomGrammar) {}
+
+  problem(): string | null {
+    return this.grammar.problem() ?? (this.pending.size > 0 ? this.scanError : null);
+  }
+
+  retryDue(): boolean {
+    return this.pending.size > 0 && this.grammar.problem() === null;
+  }
+
+  async parsePending(root: string): Promise<Map<string, ToolSymbol[]>> {
+    if (this.pending.size === 0 || this.grammar.problem() !== null) return new Map();
+    const library = this.grammar.library();
+    try {
+      const parsed = await this.grammar.parse(root, [...this.pending], library);
+      this.pending.clear();
+      this.scanError = null;
+      return parsed;
+    } catch (e) {
+      this.scanError = `${this.grammar.label} grammar not usable: ${library}: ${(e as Error).message} (rebuild it with \`${WGSL_BUILD_COMMAND}\`)`;
+      return new Map();
+    }
+  }
+}
+
 export class SyntaxIndex {
   readonly files = new Map<string, IndexedFile>();
   readonly stamps = new Map<string, FileStamp>();
   private termCache = new Map<string, Map<string, number>>();
 
-  private wgslPending = new Set<string>();
-  private wgslScanError: string | null = null;
+  private grammars: Record<GrammarLanguage, GrammarState> = {
+    wgsl: new GrammarState(GRAMMARS.wgsl),
+    scss: new GrammarState(GRAMMARS.scss),
+  };
 
   constructor(readonly root: string) {}
 
-  wgslProblem(): string | null {
-    return wgslGrammarProblem() ?? (this.wgslPending.size > 0 ? this.wgslScanError : null);
+  grammarProblem(language: GrammarLanguage): string | null {
+    return this.grammars[language].problem();
   }
 
-  wgslRetryDue(): boolean {
-    return this.wgslPending.size > 0 && wgslGrammarProblem() === null;
-  }
-
-  private async parsePendingWgsl(): Promise<Map<string, ToolSymbol[]>> {
-    if (this.wgslPending.size === 0 || wgslGrammarProblem() !== null) return new Map();
-    const library = wgslLibraryPath();
-    try {
-      const parsed = await parseWgslFiles(this.root, [...this.wgslPending], library);
-      this.wgslPending.clear();
-      this.wgslScanError = null;
-      return parsed;
-    } catch (e) {
-      this.wgslScanError = `WGSL grammar not usable: ${library}: ${(e as Error).message} (rebuild it with \`${WGSL_BUILD_COMMAND}\`)`;
-      return new Map();
-    }
+  grammarRetryDue(): boolean {
+    return Object.values(this.grammars).some((g) => g.retryDue());
   }
 
   async apply(stamps: Map<string, FileStamp>, changed: string[], deleted: string[]): Promise<void> {
     const syntax = changed.filter((p) => {
       const language = sourceLanguage(p);
-      return language === "csharp" || language === "typescript" || language === "rust";
+      return language === "csharp" || language === "typescript" || language === "rust" || language === "css";
     });
     const parsed = await parseSyntaxFiles(this.root, syntax);
-    for (const path of deleted) this.wgslPending.delete(path);
-    for (const path of changed) if (sourceLanguage(path) === "wgsl") this.wgslPending.add(path);
-    const wgsl = await this.parsePendingWgsl();
-    for (const [path, symbols] of wgsl) {
-      parsed.set(path, symbols);
-      const file = this.files.get(path);
-      if (file === undefined) continue;
-      file.symbols = symbols;
-      this.termCache.delete(path);
+    for (const path of deleted) for (const state of Object.values(this.grammars)) state.pending.delete(path);
+    for (const path of changed) {
+      const language = sourceLanguage(path);
+      if (isGrammarLanguage(language)) this.grammars[language].pending.add(path);
+    }
+    for (const state of Object.values(this.grammars)) {
+      for (const [path, symbols] of await state.parsePending(this.root)) {
+        parsed.set(path, symbols);
+        const file = this.files.get(path);
+        if (file === undefined) continue;
+        file.symbols = symbols;
+        this.termCache.delete(path);
+      }
     }
     const graphql = new Map<string, ToolSymbol[]>();
     for (const path of changed) {

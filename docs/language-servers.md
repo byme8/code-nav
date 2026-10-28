@@ -1,7 +1,7 @@
 # Language servers
 
-How the navigation tool talks to csharp-ls, typescript-language-server and rust-analyzer
-(`src/tool/lsp/`).
+How the navigation tool talks to csharp-ls, typescript-language-server, rust-analyzer and
+vscode-css-language-server (`src/tool/lsp/`).
 
 ## Client — `src/tool/lsp/client.ts`
 
@@ -120,3 +120,32 @@ servers). Installed by Homebrew (`/opt/homebrew/bin/rust-analyzer`,
 - Standard library: without a complete `rust-src` and the library's dependencies in `CARGO_HOME`,
   `std`, `core` and `alloc` load partly or not at all, so definitions into them and types that flow
   through them do not resolve; `navigation-tool.md` §Language servers and §`install rust-src`.
+
+## vscode-css-language-server
+
+Started by the pool for `.css` and `.scss` files (`navigation-tool.md` §Language servers, §CSS and
+SCSS). The executable is the `vscode-css-language-server` bin of npm `vscode-langservers-extracted`
+(checked with 4.10.0, the version npm ships, `vscode-css-languageservice` 6.3.10 underneath), from
+`PATH` or `CODE_NAV_CSS_LS`. The package is hrsh7th/vscode-langservers-extracted
+(tag `v4.10.0`, commit `0a7a86dd`, 2024-05-08): `script/build-vscode.sh` clones microsoft/vscode at
+its head of that day and copies `extensions/css-language-features/server/out`, whose
+`src/cssServer.ts` last changed in commit `06bd7ae776e2706a4aba2690d95788327dd16c43` (2022-09-26;
+the same file is on `release/1.89`).
+
+- Command: `vscode-css-language-server --stdio`, cwd and workspace root = the tree root, one process
+  per daemon serving both languages. Each document's language service is chosen by its `languageId`
+  (`css`, `scss`; anything else falls back to CSS), so the client sends those ids in `didOpen`.
+- `initializationOptions: { provideFormatter: false }`. `cssServer.ts` `onInitialize` reads only
+  `handledSchemas` (default `['file']`, kept), `provideFormatter` (formatting capability; off, the
+  default) and `customCapabilities.rangeFormatting.editLimit`; nothing is required.
+- Configuration: the server asks `workspace/configuration` for section `css` / `scss` per document
+  (only for validation, completion and hover; `findDefinition`/`findReferences` take no settings).
+  The client answers `{ validate: false }` for both, so opened documents are not linted
+  (`LanguageSettings.validate`, vscode-css-languageservice). No `css.customData` data paths are sent.
+- Ready once `initialize` has answered; documents are parsed on demand, there is no project load.
+- Scope: references and definitions stay inside one document. vscode-css-languageservice v6.3.10
+  `src/services/cssNavigation.ts`: `findReferences` returns `findDocumentHighlights` with the
+  document's own URI, and `findDefinition` resolves the symbol against that document's stylesheet;
+  the server passes both through (`connection.onReferences` / `onDefinition` in `cssServer.ts`). The
+  references include the declaration. Symbol reference types (`src/parser/cssSymbolScope.ts`):
+  `Variable` (SCSS `$x` and custom properties), `Mixin`, `Function`, `Keyframe`, `Rule` (`@extend`).

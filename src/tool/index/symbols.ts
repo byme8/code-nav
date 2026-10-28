@@ -1,7 +1,12 @@
 import type { Language } from "../language.ts";
 import type { FileStamp } from "./walk.ts";
 
-export type ToolLanguage = Language | "rust" | "wgsl";
+export type ToolLanguage = Language | "rust" | "wgsl" | "css" | "scss";
+export type StyleLanguage = "css" | "scss";
+
+export function isStyleLanguage(language: ToolLanguage): language is StyleLanguage {
+  return language === "css" || language === "scss";
+}
 
 export interface ToolSymbol {
   kind: string;
@@ -27,6 +32,8 @@ const CONTAINER_KINDS: Record<ToolLanguage, ReadonlySet<string>> = {
   graphql: new Set(["type", "input", "enum"]),
   rust: new Set(["impl", "trait", "module"]),
   wgsl: new Set(["struct"]),
+  css: new Set(["rule", "media", "supports"]),
+  scss: new Set(["rule", "placeholder", "media", "supports", "mixin", "function"]),
 };
 
 export function isContainerKind(language: ToolLanguage, kind: string): boolean {

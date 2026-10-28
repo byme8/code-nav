@@ -20,13 +20,13 @@ export function wgslLibraryPath(): string {
   return process.env[WGSL_GRAMMAR_ENV] || join(defaultGrammarDir(), WGSL_LIBRARY_FILE);
 }
 
-export function missingGrammarMessage(library: string): string {
-  return `WGSL grammar not available: ${library} not found (build it with \`${WGSL_BUILD_COMMAND}\`, or set ${WGSL_GRAMMAR_ENV})`;
+export function missingGrammarMessage(library: string, label = "WGSL", env = WGSL_GRAMMAR_ENV): string {
+  return `${label} grammar not available: ${library} not found (build it with \`${WGSL_BUILD_COMMAND}\`, or set ${env})`;
 }
 
 const configs = new Map<string, string>();
 
-export function wgslConfigPath(library: string): string {
+export function customLanguageConfigPath(language: string, library: string, languageSymbol: string, extension: string): string {
   const known = configs.get(library);
   if (known !== undefined) return known;
   const dir = join(tmpdir(), "code-nav", "grammars", createHash("sha256").update(library).digest("hex").slice(0, 16));
@@ -35,11 +35,15 @@ export function wgslConfigPath(library: string): string {
   const partial = `${path}.${process.pid}`;
   writeFileSync(
     partial,
-    `customLanguages:\n  ${AG_LANGUAGE}:\n    libraryPath: ${JSON.stringify(library)}\n    languageSymbol: tree_sitter_wgsl_bevy\n    extensions: [wgsl]\n`,
+    `customLanguages:\n  ${language}:\n    libraryPath: ${JSON.stringify(library)}\n    languageSymbol: ${languageSymbol}\n    extensions: [${extension}]\n`,
   );
   renameSync(partial, path);
   configs.set(library, path);
   return path;
+}
+
+export function wgslConfigPath(library: string): string {
+  return customLanguageConfigPath(AG_LANGUAGE, library, "tree_sitter_wgsl_bevy", "wgsl");
 }
 
 export function wgslGrammarProblem(): string | null {

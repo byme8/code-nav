@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import type { FreshnessReport } from "../daemon/freshness.ts";
 import { resolveExecutable } from "../platform.ts";
 import { LspClient, type WatchedFileChange } from "./client.ts";
-import { CSHARP_LS, TYPESCRIPT_LS } from "./servers.ts";
+import { CSHARP_LS, CSS_LS, TYPESCRIPT_LS } from "./servers.ts";
 import type { ServerRecord } from "../daemon/state.ts";
 import type { SyntaxIndex } from "../index/index.ts";
 import type { ToolLanguage } from "../index/symbols.ts";
@@ -11,20 +11,31 @@ import { sourceLanguage, type ConfigOwner } from "../index/walk.ts";
 import { ToolError, failure } from "../output.ts";
 import { stdProblem, sysrootSource } from "../rust-src.ts";
 
-export type Owner = ConfigOwner;
-export type ServerLanguage = Owner;
+export type Owner = ConfigOwner | "css";
+export type ServerLanguage = Exclude<ToolLanguage, "graphql" | "wgsl">;
 
 export const SERVER_NAMES: Record<Owner, string> = {
   csharp: "csharp-ls",
   typescript: "typescript-language-server",
   rust: "rust-analyzer",
+  css: CSS_LS,
 };
 
 const EXECUTABLE_ENV: Record<Owner, string> = {
   csharp: "CODE_NAV_CSHARP_LS",
   typescript: "CODE_NAV_TYPESCRIPT_LS",
   rust: "CODE_NAV_RUST_ANALYZER",
+  css: "CODE_NAV_CSS_LS",
 };
+
+const ALL_OWNERS: readonly Owner[] = ["csharp", "typescript", "rust", "css"];
+const CSS_INITIALIZATION_OPTIONS = { provideFormatter: false };
+const CSS_CONFIGURATION = { css: { validate: false }, scss: { validate: false } };
+
+export function serverOwner(language: ToolLanguage | null): Owner | null {
+  if (language === "csharp" || language === "typescript" || language === "rust") return language;
+  return language === "css" || language === "scss" ? "css" : null;
+}
 const RUST_ANALYZER = "rust-analyzer";
 const REQUEST_TIMEOUT_MS = 120_000;
 const SOLUTION_LOAD_TIMEOUT_MS = 600_000;
@@ -84,7 +95,7 @@ export interface Acquired {
 function executable(owner: Owner): string {
   const override = process.env[EXECUTABLE_ENV[owner]];
   if (override !== undefined && override !== "") return override;
-  return owner === "csharp" ? CSHARP_LS : owner === "typescript" ? TYPESCRIPT_LS : RUST_ANALYZER;
+  return { csharp: CSHARP_LS, typescript: TYPESCRIPT_LS, rust: RUST_ANALYZER, css: CSS_LS }[owner];
 }
 
 function depth(path: string): number {
@@ -156,7 +167,7 @@ export class ServerPool {
     private readonly onServersChanged: (servers: ServerRecord[]) => void,
   ) {}
 
-  configure(index: SyntaxIndex, owners: readonly Owner[] = ["csharp", "typescript", "rust"]): void {
+  configure(index: SyntaxIndex, owners: readonly Owner[] = ALL_OWNERS): void {
     for (const owner of owners) {
       for (const slot of this.slots.filter((s) => s.owner === owner)) this.retire(slot);
       this.slots = this.slots.filter((s) => s.owner !== owner);
@@ -172,6 +183,8 @@ export class ServerPool {
         for (const dir of discoverCargoRoots(this.root, index.stamps.keys())) {
           fresh.push(new Slot("rust", dir, dir === "" ? "Cargo.toml" : `${dir}/Cargo.toml`));
         }
+      } else if (owner === "css") {
+        if (index.filesOf(new Set(["css", "scss"])).length > 0) fresh.push(new Slot("css", "", null));
       } else {
         const roots = discoverTypescriptRoots(index.stamps.keys());
         if (roots.length === 0) fresh.push(new Slot("typescript", "", null, "no tsconfig.json in the tree"));
@@ -252,9 +265,9 @@ export class ServerPool {
     }
     const bySlot = new Map<Slot, { path: string; change: WatchedFileChange }[]>();
     const add = (path: string, change: WatchedFileChange): void => {
-      const language = sourceLanguage(path);
-      if ((language !== "csharp" && language !== "typescript" && language !== "rust") || restarted.has(language)) return;
-      const slot = this.slotOrNull(language, path);
+      const owner = serverOwner(sourceLanguage(path));
+      if (owner === null || restarted.has(owner)) return;
+      const slot = this.slotOrNull(owner, path);
       if (slot?.client?.isRunning !== true) return;
       bySlot.set(slot, [...(bySlot.get(slot) ?? []), { path, change }]);
     };
@@ -287,25 +300,28 @@ export class ServerPool {
     for (const slot of this.slots) slot.spawned?.kill();
   }
 
-  private slotOrNull(language: ToolLanguage, path: string): Slot | null {
-    if (language === "csharp") return this.slots.find((s) => s.owner === "csharp") ?? null;
-    if (language !== "typescript" && language !== "rust") return null;
+  private slotOrNull(owner: Owner, path: string): Slot | null {
+    if (owner === "csharp" || owner === "css") return this.slots.find((s) => s.owner === owner) ?? null;
     let best: Slot | null = null;
     for (const slot of this.slots) {
-      if (slot.owner !== language || !within(slot.workspace, path)) continue;
+      if (slot.owner !== owner || !within(slot.workspace, path)) continue;
       if (best === null || slot.workspace.length > best.workspace.length) best = slot;
     }
     return best;
   }
 
   private slotFor(language: ToolLanguage, path: string): Slot {
-    if (language !== "csharp" && language !== "typescript" && language !== "rust") {
-      throw new ToolError(failure(`no language server for ${language}`));
-    }
-    const slot = this.slotOrNull(language, path);
+    const owner = serverOwner(language);
+    if (owner === null) throw new ToolError(failure(`no language server for ${language}`));
+    const slot = this.slotOrNull(owner, path);
     if (slot !== null) return slot;
-    const missing = language === "rust" ? "Cargo.toml" : "tsconfig.json";
-    throw new ServerUnavailable(SERVER_NAMES[language], `no ${missing} above ${path}`);
+    if (owner === "css") {
+      const created = new Slot("css", "", null);
+      this.slots.push(created);
+      return created;
+    }
+    const missing = owner === "rust" ? "Cargo.toml" : "tsconfig.json";
+    throw new ServerUnavailable(SERVER_NAMES[owner], `no ${missing} above ${path}`);
   }
 
   private notAvailable(slot: Slot): ServerUnavailable {
@@ -348,7 +364,7 @@ export class ServerPool {
     const loaded = new Promise<void>((resolve) => (markLoaded = resolve));
     const rustStatus = { health: "", message: "" };
     const prefix = slot.workspace === "" ? 0 : slot.workspace.length + 1;
-    const args = slot.owner === "csharp" ? ["--solution", slot.solution!.slice(prefix)] : slot.owner === "typescript" ? ["--stdio"] : [];
+    const args = slot.owner === "csharp" ? ["--solution", slot.solution!.slice(prefix)] : slot.owner === "rust" ? [] : ["--stdio"];
     let rustSettings: Record<string, unknown> | undefined;
     if (slot.owner === "rust") {
       const source = sysrootSource(cwd);
@@ -365,7 +381,9 @@ export class ServerPool {
         workspaceRoot: cwd,
         requestTimeoutMs: REQUEST_TIMEOUT_MS,
         log: join(this.logDir, `${slot.name}${slot.workspace === "" ? "" : `-${slot.workspace.replaceAll("/", "_")}`}.log`),
-        initializationOptions: slot.owner === "typescript" ? { tsserver: { useSyntaxServer: "never" } } : rustSettings,
+        initializationOptions:
+          slot.owner === "typescript" ? { tsserver: { useSyntaxServer: "never" } } : slot.owner === "css" ? CSS_INITIALIZATION_OPTIONS : rustSettings,
+        ...(slot.owner === "css" ? { configuration: CSS_CONFIGURATION } : {}),
         ...(rustSettings === undefined
           ? {}
           : {

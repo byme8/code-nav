@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { compileTool } from "./compile.ts";
 import { stop } from "./daemon/lifecycle.ts";
 import { TOOL_VERSION } from "./daemon/state.ts";
+import { scssLibraryPath } from "./index/scss.ts";
 import { wgslLibraryPath } from "./index/wgsl.ts";
 import { EXE_SUFFIX, IS_WINDOWS } from "./platform.ts";
 
@@ -17,16 +18,17 @@ const OPTIONAL_SERVERS: [command: string, languages: string][] = [
   ["csharp-ls", "C#"],
   ["typescript-language-server", "TypeScript"],
   ["rust-analyzer", "Rust"],
+  ["vscode-css-language-server", "CSS/SCSS"],
 ];
 
 const SKILL_FRONT_MATTER = `---
 name: code-nav
-description: Code navigation for C#, TypeScript/TSX, GraphQL, Rust and WGSL through the code-nav CLI — semantic references, definitions, implementations and callers from language servers, plus file/symbol search, file outlines and single-symbol reads from syntax trees. Invoke it before running rg/grep or reading whole files whenever the question is where a symbol is used, defined, implemented or called, which file declares something, what a file contains, or what one function/class/property looks like in code of those languages.
+description: Code navigation for C#, TypeScript/TSX, GraphQL, Rust, WGSL, CSS and SCSS through the code-nav CLI — semantic references, definitions, implementations and callers from language servers, plus file/symbol search, file outlines and single-symbol reads from syntax trees. Invoke it before running rg/grep or reading whole files whenever the question is where a symbol is used, defined, implemented or called, which file declares something, what a file contains, or what one function/class/property looks like in code of those languages.
 ---
 `;
 
 const SKILL_GUIDANCE = `Prefer \`code-nav\` over whole-file reads and broad text search for navigation questions in C#,
-TypeScript/TSX, GraphQL, Rust and WGSL code, and run it from the repository root. Fall back to
+TypeScript/TSX, GraphQL, Rust, WGSL, CSS and SCSS code, and run it from the repository root. Fall back to
 \`rg\`/Read for other languages, for text that is not a declared name (string literals, comments,
 config values), or when code-nav answers \`error:\`.
 `;
@@ -209,8 +211,9 @@ function missingOptional(): string[] {
   for (const [command, language] of OPTIONAL_SERVERS) {
     if (Bun.which(command) === null) missing.push(`${command} (${language} refs/def/impls/callers answer error:)`);
   }
-  const grammar = wgslLibraryPath();
-  if (!existsSync(grammar)) missing.push(`WGSL grammar ${grammar} (build it with \`bun src/tool/grammars.ts\`)`);
+  for (const [label, grammar] of [["WGSL", wgslLibraryPath()], ["SCSS", scssLibraryPath()]] as const) {
+    if (!existsSync(grammar)) missing.push(`${label} grammar ${grammar} (build it with \`bun src/tool/grammars.ts\`)`);
+  }
   return missing;
 }
 

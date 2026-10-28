@@ -75,6 +75,8 @@ const LANGUAGE_IDS: Record<string, string> = {
   ".js": "javascript",
   ".jsx": "javascriptreact",
   ".rs": "rust",
+  ".css": "css",
+  ".scss": "scss",
 };
 
 const DEFAULT_TIMEOUT_MS = 60_000;

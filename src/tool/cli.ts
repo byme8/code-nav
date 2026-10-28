@@ -7,7 +7,7 @@ import { install } from "./install.ts";
 
 const USAGE = [
   "usage: code-nav [--root <dir>] <command> …",
-  "  find [--target file|member] [--lang csharp|typescript|graphql|rust|wgsl]… [--kind tests|migrations|generated]… <words…>",
+  "  find [--target file|member] [--lang csharp|typescript|graphql|rust|wgsl|css|scss]… [--kind tests|migrations|generated]… <words…>",
   "  outline <path>",
   "  show <path>:<line>[:<col>] [<name>] | <path> <name> [<line>] | <name> | <Owner.name>",
   "  refs | def [--schema <path>] <path>:<line>:<col> | <path>:<line> <name> | <name> | <Owner.name>",

@@ -1,7 +1,8 @@
 import type { SyntaxIndex } from "../index/index.ts";
 import type { Location } from "./client.ts";
 import type { LspClient } from "./client.ts";
-import type { ToolSymbol } from "../index/symbols.ts";
+import { isStyleLanguage, type ToolSymbol } from "../index/symbols.ts";
+import { CSS_LS } from "./servers.ts";
 import { ToolError, failure } from "../output.ts";
 import { compareBytes, type CommandContext } from "../commands/context.ts";
 import { fileLines, type ResolvedPosition } from "../commands/position.ts";
@@ -16,11 +17,23 @@ export function serversOf(ctx: CommandContext): ServerPool {
 
 export function requireServerLanguage(command: string, position: ResolvedPosition): ServerLanguage {
   const language = position.file.language;
-  if (language === "csharp" || language === "typescript" || language === "rust") return language;
+  if (language === "csharp" || language === "typescript" || language === "rust" || language === "css" || language === "scss") return language;
   if (language === "wgsl") {
     throw new ToolError(failure(`no language server for wgsl: ${position.file.path} is WGSL, which has syntax commands only (find, outline, show)`));
   }
   throw new ToolError(failure(`${command} needs a C# or TypeScript position; ${position.file.path} is GraphQL`));
+}
+
+export function rejectStyleLanguage(command: string, position: ResolvedPosition): void {
+  const language = position.file.language;
+  if (!isStyleLanguage(language)) return;
+  throw new ToolError(
+    failure(`${command} is not supported for ${language}: ${position.file.path} is ${language.toUpperCase()}, where ${CSS_LS} answers refs and def only`),
+  );
+}
+
+export function styleScopeNote(position: ResolvedPosition, what: "references" | "definitions"): string[] {
+  return isStyleLanguage(position.file.language) ? [`note: ${CSS_LS} resolves ${what} inside ${position.file.path} only`] : [];
 }
 
 export async function ask<T>(

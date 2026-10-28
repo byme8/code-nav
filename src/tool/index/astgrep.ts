@@ -1,8 +1,10 @@
 import { isAbsolute, relative } from "node:path";
 import { IS_WINDOWS, resolveExecutable } from "../platform.ts";
 import { declarationKinds, outlineRules, ruleText, type AgLanguage, type Rule, type RuleDoc } from "./rules.ts";
+import { styleKind, styleName, styleRuleText } from "./css.ts";
 import { implOwner, rustRuleText } from "./rust.ts";
-import { assignContainers, type Spanned, type ToolLanguage, type ToolSymbol } from "./symbols.ts";
+import { scssConfigPath } from "./scss.ts";
+import { assignContainers, isStyleLanguage, type Spanned, type ToolLanguage, type ToolSymbol } from "./symbols.ts";
 import { addressSpaceKind, wgslConfigPath, wgslRuleText } from "./wgsl.ts";
 
 const DECLARATION_ID = "declaration";
@@ -60,9 +62,10 @@ const RULES = ruleText([
   ...(["CSharp", "TypeScript", "Tsx"] as const).map(
     (language): RuleDoc => ({ id: DECLARATION_ID, language, rule: declarationRule(language) }),
   ),
-]) + "\n---\n" + rustRuleText(DECLARATION_ID);
+]) + "\n---\n" + rustRuleText(DECLARATION_ID) + "\n---\n" + styleRuleText("Css", DECLARATION_ID);
 
 const WGSL_RULES = wgslRuleText(DECLARATION_ID);
+const SCSS_RULES = styleRuleText("scss", DECLARATION_ID);
 
 interface Point {
   line: number;
@@ -80,11 +83,19 @@ export interface StreamMatch {
 function languageOfPath(path: string): ToolLanguage {
   if (path.endsWith(".rs")) return "rust";
   if (path.endsWith(".wgsl")) return "wgsl";
+  if (path.endsWith(".css")) return "css";
+  if (path.endsWith(".scss")) return "scss";
   return path.endsWith(".cs") ? "csharp" : "typescript";
 }
 
 function nameOf(language: ToolLanguage, m: StreamMatch): string {
+  if (isStyleLanguage(language)) return styleName(m.ruleId, m.text);
   return language === "rust" ? m.message.replace(/\s+/g, " ") : m.text;
+}
+
+function kindOf(language: ToolLanguage, m: StreamMatch, name: string, declaration: StreamMatch | null): string {
+  if (language === "wgsl" && m.ruleId === "var" && declaration !== null) return addressSpaceKind(declaration.text);
+  return isStyleLanguage(language) ? styleKind(m.ruleId, name) : m.ruleId;
 }
 
 function symbolsOf(path: string, matches: StreamMatch[]): ToolSymbol[] {
@@ -102,9 +113,10 @@ function symbolsOf(path: string, matches: StreamMatch[]): ToolSymbol[] {
       if (best === null || size < best.range.byteOffset.end - best.range.byteOffset.start) best = d;
     }
     const nameLine = m.range.start.line + 1;
+    const name = nameOf(language, m);
     const symbol: ToolSymbol = {
-      kind: language === "wgsl" && m.ruleId === "var" && best !== null ? addressSpaceKind(best.text) : m.ruleId,
-      name: nameOf(language, m),
+      kind: kindOf(language, m, name, best),
+      name,
       start: best === null ? nameLine : best.range.start.line + 1,
       end: best === null ? nameLine : best.range.end.line + 1,
       nameLine,
@@ -159,6 +171,10 @@ export async function scanBatch(
 
 export function parseWgslFiles(root: string, paths: string[], library: string): Promise<Map<string, ToolSymbol[]>> {
   return parseSyntaxFiles(root, paths, WGSL_RULES, wgslConfigPath(library));
+}
+
+export function parseScssFiles(root: string, paths: string[], library: string): Promise<Map<string, ToolSymbol[]>> {
+  return parseSyntaxFiles(root, paths, SCSS_RULES, scssConfigPath(library));
 }
 
 export async function parseSyntaxFiles(

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Located } from "../index/index.ts";
 import type { Position } from "../lsp/client.ts";
-import type { IndexedFile } from "../index/symbols.ts";
+import { isStyleLanguage, type IndexedFile, type ToolLanguage } from "../index/symbols.ts";
 import { ToolError, ambiguous, failure, notFound } from "../output.ts";
 import { compareBytes, indexedFile, looksLikePath, type CommandContext } from "./context.ts";
 
@@ -15,7 +15,12 @@ export interface ResolvedPosition {
 
 export const POSITION_FORMS = "<path>:<line>:<col> | <path>:<line> <name> | <name> | <Owner.name>";
 
-const IDENTIFIER = /[\p{L}\p{N}_$]/u;
+const IDENTIFIER_CHARS = "\\p{L}\\p{N}_$";
+const STYLE_IDENTIFIER_CHARS = "\\p{L}\\p{N}_$%\\-";
+
+function identifierChars(language: ToolLanguage | null): string {
+  return language !== null && isStyleLanguage(language) ? STYLE_IDENTIFIER_CHARS : IDENTIFIER_CHARS;
+}
 
 export function fileLines(root: string, path: string): string[] {
   return readFileSync(join(root, path), "utf8")
@@ -27,13 +32,24 @@ function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function identifierAt(lineText: string, column: number): string {
+function identifierSpan(lineText: string, column: number, language: ToolLanguage | null): { chars: string[]; from: number; to: number } {
+  const identifier = new RegExp(`[${identifierChars(language)}]`, "u");
   const chars = Array.from(lineText);
   let from = column - 1;
   let to = column - 1;
-  while (from > 0 && IDENTIFIER.test(chars[from - 1]!)) from--;
-  while (to < chars.length && IDENTIFIER.test(chars[to]!)) to++;
+  while (from > 0 && identifier.test(chars[from - 1]!)) from--;
+  while (to < chars.length && identifier.test(chars[to]!)) to++;
+  return { chars, from, to };
+}
+
+export function identifierAt(lineText: string, column: number, language: ToolLanguage | null = null): string {
+  const { chars, from, to } = identifierSpan(lineText, column, language);
   return chars.slice(from, to).join("");
+}
+
+export function charBeforeIdentifier(lineText: string, column: number, language: ToolLanguage | null): string {
+  const { chars, from } = identifierSpan(lineText, column, language);
+  return chars[from - 1] ?? "";
 }
 
 function parseNumber(text: string, what: string): number {
@@ -53,11 +69,16 @@ export function declarationsNamed(ctx: CommandContext, name: string, owner: stri
   return found.filter((l) => !(l.symbol.kind === "constructor" && l.symbol.container === name && types.has(`${l.file.path}\0${name}`)));
 }
 
+export function styleDeclarationsNamed(ctx: CommandContext, input: string): Located[] | null {
+  const found = ctx.index.symbolsNamed(input, null).filter((l) => isStyleLanguage(l.file.language));
+  return found.length > 0 ? found : null;
+}
+
 function byDeclaration(ctx: CommandContext, input: string): ResolvedPosition {
   const parts = input.split(".");
   const name = parts.at(-1)!;
   const owner = parts.length > 1 ? parts.at(-2)! : null;
-  const found = declarationsNamed(ctx, name, owner);
+  const found = styleDeclarationsNamed(ctx, input) ?? declarationsNamed(ctx, name, owner);
   if (found.length === 0) throw new ToolError(notFound(`declaration of ${input}`));
   if (found.length > 1) {
     const sorted = [...found].sort(
@@ -87,10 +108,11 @@ export function parsePosition(ctx: CommandContext, usage: string): ResolvedPosit
       const column = parseNumber(match[3], "column");
       const width = Array.from(text).length;
       if (column > width + 1) throw new ToolError(notFound(`column ${column} on ${file.path}:${line} (${width} characters)`));
-      return { file, line, column, name: identifierAt(text, column) };
+      return { file, line, column, name: identifierAt(text, column, file.language) };
     }
     if (second === undefined) throw new ToolError(failure(usage));
-    const at = new RegExp(`(?<![\\p{L}\\p{N}_$])${escapeRegex(second)}(?![\\p{L}\\p{N}_$])`, "u").exec(text);
+    const chars = identifierChars(file.language);
+    const at = new RegExp(`(?<![${chars}])${escapeRegex(second)}(?![${chars}])`, "u").exec(text);
     if (at === null) throw new ToolError(notFound(`${second} on ${file.path}:${line}`));
     return { file, line, column: Array.from(text.slice(0, at.index)).length + 1, name: second };
   }

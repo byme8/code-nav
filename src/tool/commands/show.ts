@@ -4,6 +4,7 @@ import type { Located } from "../index/index.ts";
 import type { IndexedFile, ToolSymbol } from "../index/symbols.ts";
 import { ToolError, ambiguous, failure, notFound, success, symbolHeader, type Reply } from "../output.ts";
 import { compareBytes, indexedFile, looksLikePath, type Command, type CommandContext } from "./context.ts";
+import { styleDeclarationsNamed } from "./position.ts";
 
 const USAGE = "usage: code-nav show <path>:<line>[:<col>] [<name>] | <path> <name> [<line>] | <name> | <Owner.name>";
 
@@ -65,6 +66,6 @@ export const show: Command = {
     }
     if (second !== undefined) return failure(USAGE);
     const parts = first.split(".");
-    return oneOf(ctx, first, ctx.index.symbolsNamed(parts.at(-1)!, parts.at(-2) ?? null));
+    return oneOf(ctx, first, styleDeclarationsNamed(ctx, first) ?? ctx.index.symbolsNamed(parts.at(-1)!, parts.at(-2) ?? null));
   },
 };
