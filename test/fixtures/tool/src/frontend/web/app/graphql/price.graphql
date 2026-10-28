@@ -1,0 +1,10 @@
+query GetPrice($id: ID!) {
+  price(id: $id) {
+    ...PriceFields
+  }
+}
+
+fragment PriceFields on PriceOutput {
+  primaryAmount
+  currency
+}

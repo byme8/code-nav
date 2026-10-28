@@ -1,0 +1,16 @@
+type Query {
+  price(id: ID!): PriceOutput
+}
+
+"""
+A computed price.
+"""
+type PriceOutput {
+  primaryAmount: Decimal!
+  currency: String!
+}
+
+enum Currency {
+  USD
+  EUR
+}
