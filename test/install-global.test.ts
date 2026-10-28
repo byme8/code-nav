@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addPermission } from "../src/tool/install-global.ts";
+import { addPermission } from "../src/tool/setup.ts";
 
 const SCRIPT = join(import.meta.dir, "..", "src", "tool", "install-global.ts");
 const NOTE = join(import.meta.dir, "..", "prompts", "navigation-tool-note.md");

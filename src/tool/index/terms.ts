@@ -111,12 +111,12 @@ export interface MemberUnit {
   terms: Terms;
 }
 
-export function memberUnits(file: IndexedFile): MemberUnit[] {
+export function memberUnits(file: IndexedFile, allSymbols = false): MemberUnit[] {
   const pathTerms: Terms = new Map();
   for (const segment of file.path.split("/")) putTerms(pathTerms, segment, MEMBER_PLACE.path);
   const out: MemberUnit[] = [];
   for (const symbol of file.symbols) {
-    if (!isMember(file, symbol)) continue;
+    if (!allSymbols && !isMember(file, symbol)) continue;
     const terms: Terms = new Map(pathTerms);
     if (symbol.container !== null) putTerms(terms, symbol.container, MEMBER_PLACE.owner);
     putTerms(terms, symbol.name, MEMBER_PLACE.name);

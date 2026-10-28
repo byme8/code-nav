@@ -6,7 +6,7 @@ import { ToolError, ambiguous, failure, notFound, success, symbolHeader, type Re
 import { compareBytes, indexedFile, looksLikePath, type Command, type CommandContext } from "./context.ts";
 import { isTemplateSymbol, styleDeclarationsNamed } from "./position.ts";
 
-const USAGE = "usage: code-nav show <path>:<line>[:<col>] [<name>] | <path> <name> [<line>] | <name> | <Owner.name>";
+const USAGE = "usage: code-nav show <path>:<line>[:<col>] [<name>] | <path> <name> [<line>] | <path> <Owner.name> | <name> | <Owner.name>";
 
 function parseLine(text: string): number {
   if (!/^\d+$/.test(text) || Number(text) < 1) throw new ToolError(failure(`not a line number: ${text}`));
@@ -58,11 +58,14 @@ export const show: Command = {
       if (second === undefined) return failure(USAGE);
       const file = indexedFile(ctx, first);
       if (third !== undefined) return atLine(ctx, file, parseLine(third), second);
-      return oneOf(
-        ctx,
-        `${second} in ${file.path}`,
-        file.symbols.filter((s) => s.name === second).map((symbol) => ({ file, symbol })),
-      );
+      let named = file.symbols.filter((s) => s.name === second);
+      const dot = second.lastIndexOf(".");
+      if (named.length === 0 && dot > 0) {
+        const owner = second.slice(0, dot);
+        const name = second.slice(dot + 1);
+        named = file.symbols.filter((s) => s.name === name && s.container !== null && (s.container === owner || s.container.endsWith(`.${owner}`)));
+      }
+      return oneOf(ctx, `${second} in ${file.path}`, named.map((symbol) => ({ file, symbol })));
     }
     if (second !== undefined) return failure(USAGE);
     const parts = first.split(".");

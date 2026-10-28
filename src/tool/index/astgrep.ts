@@ -1,5 +1,8 @@
+import type { Subprocess } from "bun";
+import { existsSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
-import { IS_WINDOWS, resolveExecutable } from "../platform.ts";
+import { AST_GREP_ENV, AST_GREP_EXE, AST_GREP_INSTALL_COMMAND, installedAstGrep } from "../ast-grep-dist.ts";
+import { IS_WINDOWS } from "../platform.ts";
 import { DECORATOR_KINDS, DECORATOR_RULES, angularConfigPath, angularRuleText, blockName } from "./angular.ts";
 import { declarationKinds, outlineRules, ruleText, type AgLanguage, type Rule, type RuleDoc } from "./rules.ts";
 import { styleKind, styleName, styleRuleText } from "./css.ts";
@@ -15,16 +18,23 @@ const COMMAND_LINE_RESERVE = 2_048;
 const CONCURRENCY = 4;
 
 let astGrep: string | null = null;
+const running = new Set<Subprocess>();
+
+export function killAstGrep(): void {
+  for (const proc of running) proc.kill("SIGKILL");
+  running.clear();
+}
 
 export function astGrepExecutable(): string {
   if (astGrep !== null) return astGrep;
-  const resolved = resolveExecutable("ast-grep");
-  if (resolved === null) throw new Error("ast-grep not found on PATH");
-  if (IS_WINDOWS && !/\.exe$/i.test(resolved)) {
-    throw new Error(`ast-grep at ${resolved} is a script shim; install the native ast-grep.exe (cargo, scoop or winget)`);
+  const override = process.env[AST_GREP_ENV];
+  if (override) {
+    if (!existsSync(override)) throw new Error(`${AST_GREP_ENV}=${override} not found`);
+    return (astGrep = override);
   }
-  astGrep = resolved;
-  return astGrep;
+  const resolved = installedAstGrep() ?? Bun.which(AST_GREP_EXE);
+  if (resolved === null) throw new Error(`ast-grep not installed; run \`${AST_GREP_INSTALL_COMMAND}\``);
+  return (astGrep = resolved);
 }
 
 export function scanBatches(paths: string[], rules: string): string[][] {
@@ -175,7 +185,7 @@ export async function scanBatch(
     [
       astGrepExecutable(),
       "scan",
-      ...(config === null ? [] : ["--config", config]),
+      ...(config === null ? [] : ["--config", config, "--custom-languages", "allow"]),
       "--inline-rules",
       rules,
       "--json=stream",
@@ -186,6 +196,8 @@ export async function scanBatch(
     ],
     { cwd: root, stdout: "pipe", stderr: "pipe", stdin: "ignore", windowsHide: true },
   );
+  running.add(proc);
+  void proc.exited.finally(() => running.delete(proc));
   const byFile = new Map<string, StreamMatch[]>();
   let matched = 0;
   const take = (raw: string): void => {

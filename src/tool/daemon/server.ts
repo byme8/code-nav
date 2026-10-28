@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { runCommand, COMMANDS } from "../commands/index.ts";
+import { killAstGrep } from "../index/astgrep.ts";
 import { SyntaxIndex } from "../index/index.ts";
 import { ServerPool } from "../lsp/pool.ts";
 import { failure, success, type Reply } from "../output.ts";
@@ -47,6 +48,7 @@ export async function runDaemon(root: string): Promise<void> {
     if (idleTimer !== null) clearTimeout(idleTimer);
     log(`stopping: ${why}`);
     server.close();
+    killAstGrep();
     await pool.stopAll();
     if (readDaemonInfo(paths)?.pid === process.pid) rmSync(paths.dir, { recursive: true, force: true });
     process.exit(0);
@@ -106,12 +108,18 @@ export async function runDaemon(root: string): Promise<void> {
   let queue: Promise<void> = Promise.resolve();
   server.on("connection", (socket: Socket) => {
     const chunks: Buffer[] = [];
-    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let received = false;
     socket.on("error", () => socket.destroy());
-    socket.on("end", () => {
+    socket.on("data", (chunk: Buffer) => {
+      if (received) return;
+      chunks.push(chunk);
+      const text = Buffer.concat(chunks).toString("utf8");
+      const newline = text.indexOf("\n");
+      if (newline < 0) return;
+      received = true;
       let request: Request;
       try {
-        request = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Request;
+        request = JSON.parse(text.slice(0, newline)) as Request;
       } catch (e) {
         void answer(socket, failure(`bad request: ${(e as Error).message}`));
         return;
@@ -142,7 +150,10 @@ export async function runDaemon(root: string): Promise<void> {
 
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(signal, () => void shutdown(signal));
   process.on("uncaughtException", (e) => log(`uncaught: ${e.stack ?? String(e)}`));
-  process.on("exit", () => pool.killAll());
+  process.on("exit", () => {
+    killAstGrep();
+    pool.killAll();
+  });
 
   if (!IS_WINDOWS) rmSync(paths.socket, { force: true });
   await new Promise<void>((resolve, reject) => {

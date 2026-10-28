@@ -35,7 +35,7 @@ export function send(socketPath: string, request: Request, timeoutMs: number | n
             socket.destroy();
             settle(() => reject(new TransportError(`no reply within ${timeoutMs / 1000} s`, "timeout")));
           }, timeoutMs);
-    socket.on("connect", () => socket.end(JSON.stringify(request)));
+    socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
     socket.on("data", (chunk: Buffer) => chunks.push(chunk));
     socket.on("error", (e: NodeJS.ErrnoException) => {
       const reason =

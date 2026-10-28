@@ -121,7 +121,7 @@ export class LspClient {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      detached: true,
+      detached: !IS_WINDOWS,
       windowsHide: true,
       windowsVerbatimArguments: spawned.verbatim,
       env: { ...process.env, ...options.env },

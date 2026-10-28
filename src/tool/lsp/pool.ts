@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { FreshnessReport } from "../daemon/freshness.ts";
+import { serverSelected } from "../languages.ts";
 import { resolveExecutable } from "../platform.ts";
 import { LspClient, type WatchedFileChange } from "./client.ts";
 import { ANGULAR_LS_NAME, angularLaunch, serverCommand, type AngularLaunch } from "./servers.ts";
@@ -169,6 +170,7 @@ export class ServerPool {
     this.index = index;
     const owners: SlotKind[] = configOwners.includes("typescript") ? [...configOwners, "angular"] : [...configOwners];
     for (const owner of owners) {
+      const active = new Set(this.slots.filter((s) => s.owner === owner && s.ready !== null).map((s) => s.workspace));
       for (const slot of this.slots.filter((s) => s.owner === owner)) this.retire(slot);
       this.slots = this.slots.filter((s) => s.owner !== owner);
       const fresh: Slot[] = [];
@@ -192,8 +194,11 @@ export class ServerPool {
         if (roots.length === 0) fresh.push(new Slot("typescript", "", null, "no tsconfig.json in the tree"));
         for (const dir of roots) fresh.push(new Slot("typescript", dir, null));
       }
+      if (!serverSelected(owner)) {
+        for (const slot of fresh) slot.unavailable ??= `not selected; add it with \`code-nav install --lang ${owner}\``;
+      }
       this.slots.push(...fresh);
-      for (const slot of fresh) if (slot.unavailable === null) this.start(slot);
+      for (const slot of fresh) if (slot.unavailable === null && active.has(slot.workspace)) this.start(slot);
     }
     this.publish();
   }
@@ -212,6 +217,7 @@ export class ServerPool {
     return this.slots.map((slot) => {
       const where = slot.workspace === "" ? "." : slot.workspace;
       if (slot.unavailable !== null) return `server ${slot.name} ${where} not available: ${slot.unavailable}`;
+      if (slot.ready === null) return `server ${slot.name} ${where} idle (starts on first use)`;
       const pid = slot.spawned?.isRunning === true ? `pid ${slot.spawned.pid}` : "no process";
       return `server ${slot.name} ${where} ${pid} ${slot.loaded ? "ready" : "starting"}`;
     });

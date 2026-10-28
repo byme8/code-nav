@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { writeSync } from "node:fs";
 import { EXIT } from "./output.ts";
 import { ensureDaemon, request, status, stop } from "./daemon/lifecycle.ts";
 import { runDaemon } from "./daemon/server.ts";
@@ -9,16 +10,17 @@ import { uninstall } from "./uninstall.ts";
 
 const USAGE = [
   "usage: code-nav [--root <dir>] <command> …",
-  "  find [--target file|member] [--lang csharp|typescript|graphql|rust|wgsl|css|scss]… [--kind tests|migrations|generated]… <words…>",
+  "  find [--target file|member|symbol][--lang csharp|typescript|graphql|rust|wgsl|css|scss]… [--kind tests|migrations|generated]… <words…>",
   "  outline <path>",
   "  show <path>:<line>[:<col>] [<name>] | <path> <name> [<line>] | <name> | <Owner.name>",
   "  refs | def [--schema <path>] <path>:<line>:<col> | <path>:<line> <name> | <name> | <Owner.name>",
   "  impls | callers <path>:<line>:<col> | <path>:<line> <name> | <name> | <Owner.name>",
   "  trace [--schema <path>] <path>:<line>:<col> | <path>:<line> <name> | <Type.Property>",
   "  status | stop",
-  "  install rust-src | grammars",
+  "  install [--lang <id,…>]… [--yes] [--claude-home <dir>]",
+  "  install ast-grep | rust-src | grammars",
   "  doctor",
-  "  uninstall [--bin-dir <dir>] [--claude-home <dir>]",
+  "  uninstall [--claude-home <dir>]",
 ];
 
 const output: string[] = [];
@@ -49,7 +51,7 @@ async function main(argv: string[]): Promise<number> {
     write(USAGE.join("\n"));
     return command === undefined ? EXIT.error : EXIT.success;
   }
-  if (command === "install") return await install(args.slice(1), write);
+  if (command === "install") return await install(args.slice(1), (text) => writeSync(1, text.endsWith("\n") ? text : `${text}\n`));
   if (command === "doctor") return doctor(args.slice(1), write);
   if (command === "uninstall") return await uninstall(args.slice(1), write);
   let root: string;
@@ -92,6 +94,6 @@ async function main(argv: string[]): Promise<number> {
 
 const code = await main(process.argv.slice(2));
 if (code >= 0) {
-  await Bun.write(Bun.stdout, output.join(""));
+  if (output.length > 0) await Bun.write(Bun.stdout, output.join(""));
   process.exit(code);
 }

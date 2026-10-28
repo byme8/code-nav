@@ -1,6 +1,21 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { diagnose } from "./doctor.ts";
+import { LANGUAGES, LANGUAGE_LABELS, isLanguage, readSelection, writeSelection, type LanguageId } from "./languages.ts";
+import { resolveExecutable, spawnArgv } from "./platform.ts";
+import { installPermission, installSkill, stopAllDaemons } from "./setup.ts";
+import {
+  AST_GREP_ENV,
+  AST_GREP_EXE,
+  AST_GREP_PLATFORM,
+  AST_GREP_VERSION,
+  astGrepRelease,
+  astGrepVersionDir,
+  installedAstGrep,
+  zipEntry,
+} from "./ast-grep-dist.ts";
 import { buildAllGrammars } from "./grammars.ts";
 import { EXIT } from "./output.ts";
 import {
@@ -13,7 +28,8 @@ import {
   versionDir,
 } from "./rust-src.ts";
 
-export const INSTALL_USAGE = "usage: code-nav install rust-src | grammars";
+export const INSTALL_USAGE = "usage: code-nav install [--lang <id,…>]… [--yes] [--claude-home <dir>] | install ast-grep | rust-src | grammars";
+const SETUP_USAGE = "usage: code-nav install [--lang <id,…>]… [--yes] [--claude-home <dir>]";
 const PARTIAL = /^\.partial-(\d+)$/;
 
 type Out = (line: string) => void;
@@ -132,6 +148,43 @@ async function installSource(version: string, out: Out): Promise<string> {
   }
 }
 
+export async function installAstGrep(out: Out): Promise<string> {
+  const installed = installedAstGrep();
+  if (installed !== null) {
+    out(`ast-grep ${AST_GREP_VERSION} already installed at ${installed}`);
+    return installed;
+  }
+  const release = astGrepRelease();
+  if (release === null) throw new InstallError(`no pinned ast-grep ${AST_GREP_VERSION} build for ${AST_GREP_PLATFORM}; set ${AST_GREP_ENV}`);
+  const target = astGrepVersionDir();
+  const base = join(target, "..");
+  mkdirSync(base, { recursive: true });
+  removeStalePartials(base);
+  const partial = join(base, `.partial-${process.pid}`);
+  rmSync(partial, { recursive: true, force: true });
+  mkdirSync(partial);
+  try {
+    out(`downloading ${release.url}`);
+    const archive = join(partial, release.asset);
+    const { bytes, sha256 } = await download(release.url, archive);
+    if (sha256 !== release.sha256) {
+      throw new InstallError(`sha256 mismatch for ${release.url}: pinned ${release.sha256}, downloaded ${sha256}; download deleted`);
+    }
+    out(`downloaded ${release.asset} (${megabytes(bytes)}), sha256 ${sha256} matches the pin`);
+    const exe = zipEntry(new Uint8Array(await Bun.file(archive).arrayBuffer()), AST_GREP_EXE);
+    if (exe === null) throw new InstallError(`extract failed: ${release.asset} has no ${AST_GREP_EXE}`);
+    const staged = join(partial, AST_GREP_EXE);
+    writeFileSync(staged, exe, { mode: 0o755 });
+    rmSync(archive);
+    renameSync(partial, target);
+    const path = join(target, AST_GREP_EXE);
+    out(`installed ast-grep ${AST_GREP_VERSION} at ${path}`);
+    return path;
+  } finally {
+    rmSync(partial, { recursive: true, force: true });
+  }
+}
+
 function cargo(args: string[], quiet: boolean): { ok: boolean; detail: string } {
   const command = process.env.CARGO || "cargo";
   try {
@@ -167,7 +220,118 @@ function fetchDependencies(library: string, alreadyInstalled: boolean, out: Out)
   }
 }
 
+type SetupArgs = { languages: LanguageId[] | null; yes: boolean; claudeHome: string };
+
+function parseSetup(args: string[]): SetupArgs | string {
+  const parsed: SetupArgs = { languages: null, yes: false, claudeHome: join(homedir(), ".claude") };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--yes" || arg === "-y") parsed.yes = true;
+    else if (arg === "--claude-home" && args[i + 1]) parsed.claudeHome = resolve(args[++i]!);
+    else if (arg === "--lang" && args[i + 1]) {
+      const ids = args[++i]!.split(",").map((s) => s.trim()).filter((s) => s !== "");
+      const all = ids.includes("all") ? [...LANGUAGES] : ids;
+      const unknown = all.filter((id) => !isLanguage(id));
+      if (unknown.length > 0) return `unknown language ${unknown.join(", ")}; one of ${LANGUAGES.join(", ")} or all`;
+      parsed.languages = [...new Set([...(parsed.languages ?? []), ...(all as LanguageId[])])];
+    } else return SETUP_USAGE;
+  }
+  return parsed;
+}
+
+function pickLanguages(out: Out): LanguageId[] | null {
+  const current = readSelection();
+  out("Which languages should code-nav support?");
+  LANGUAGES.forEach((id, i) => out(`  ${i + 1}. [${current?.includes(id) ? "x" : " "}] ${LANGUAGE_LABELS[id]} (${id})`));
+  for (;;) {
+    const answer = prompt(`Numbers or names, comma-separated, or all${current === null ? "" : "; Enter keeps the marked ones"}:`);
+    if (answer === null) return current;
+    const tokens = answer.split(/[\s,]+/).filter((t) => t !== "");
+    if (tokens.length === 0 && current !== null) return current;
+    if (tokens.includes("all")) return [...LANGUAGES];
+    const picked = tokens.map((t) => (/^\d+$/.test(t) ? LANGUAGES[Number(t) - 1] : isLanguage(t) ? t : undefined));
+    if (tokens.length > 0 && picked.every((id) => id !== undefined)) return LANGUAGES.filter((id) => picked.includes(id));
+    out(`not understood: ${answer}`);
+  }
+}
+
+function runFix(fix: string[], out: Out): Promise<boolean> | boolean {
+  if (fix[0] === "code-nav") return install(fix.slice(2), out).then((code) => code === EXIT.success);
+  const command = resolveExecutable(fix[0]!);
+  if (command === null) {
+    out(`skipped ${fix.join(" ")}: ${fix[0]} not found on PATH`);
+    return false;
+  }
+  const spawned = spawnArgv([command, ...fix.slice(1)]);
+  const proc = Bun.spawnSync(spawned.argv, { stdio: ["inherit", "inherit", "inherit"], windowsVerbatimArguments: spawned.verbatim });
+  if (proc.exitCode !== 0) out(`failed ${fix.join(" ")}: exit ${proc.exitCode}`);
+  return proc.exitCode === 0;
+}
+
+async function setup(args: string[], out: Out): Promise<number> {
+  const parsed = parseSetup(args);
+  if (typeof parsed === "string") {
+    out(`error: ${parsed}`);
+    return EXIT.error;
+  }
+  const interactive = process.stdin.isTTY === true;
+  if (parsed.languages === null && !interactive) {
+    out(`error: not a terminal; pass --lang <${LANGUAGES.join("|")}|all>[,…] (and --yes to run the installers)`);
+    return EXIT.error;
+  }
+  const languages = parsed.languages ?? pickLanguages(out);
+  if (languages === null || languages.length === 0) {
+    out("error: no languages selected");
+    return EXIT.error;
+  }
+  out(`languages: ${languages.map((id) => LANGUAGE_LABELS[id]).join(", ")}`);
+
+  if (!process.env[AST_GREP_ENV]) {
+    try {
+      await installAstGrep(out);
+    } catch (e) {
+      out(`error: ast-grep install failed (${(e as Error).message}); code-nav needs it for every command`);
+      return EXIT.error;
+    }
+  }
+
+  const missing = diagnose(languages).languages.flatMap((l) => l.checks.filter((c) => c.found === null));
+  const fixes = [...new Map(missing.filter((c) => c.fix !== undefined).map((c) => [c.fix!.join(" "), c.fix!])).values()];
+  for (const check of missing.filter((c) => c.fix === undefined)) out(`manual: ${check.what}: ${check.hint}`);
+  if (fixes.length > 0) {
+    out("to install:");
+    for (const fix of fixes) out(`  ${fix.join(" ")}`);
+    const go = parsed.yes || (interactive && /^(y|yes|)$/i.test((prompt("Run these commands? [Y/n]") ?? "n").trim()));
+    if (go) {
+      for (const fix of fixes) {
+        out(`> ${fix.join(" ")}`);
+        await runFix(fix, out);
+      }
+    } else out("not run; run them yourself, or rerun with --yes");
+  }
+
+  out(`selection: ${writeSelection(languages)}`);
+  out(installSkill(parsed.claudeHome));
+  const permission = installPermission(join(parsed.claudeHome, "settings.json"));
+  out(permission.line);
+  out(`daemons: ${await stopAllDaemons()} stopped`);
+  const report = diagnose(languages);
+  for (const language of report.languages) out(language.summary);
+  return report.astGrep.found !== null && permission.ok ? EXIT.success : EXIT.error;
+}
+
 export async function install(args: string[], out: Out): Promise<number> {
+  if (args.length === 0 || args[0]!.startsWith("-")) return await setup(args, out);
+  if (args.length === 1 && args[0] === "ast-grep") {
+    try {
+      await installAstGrep(out);
+      out("a running daemon picks it up after `code-nav stop`");
+      return EXIT.success;
+    } catch (e) {
+      out(`error: ${(e as Error).message}`);
+      return EXIT.error;
+    }
+  }
   if (args.length === 1 && args[0] === "grammars") {
     try {
       await buildAllGrammars(out);

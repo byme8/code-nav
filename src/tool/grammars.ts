@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ANGULAR_LIBRARY_FILE } from "./index/angular.ts";
@@ -46,7 +46,7 @@ export const PREBUILT_TARGETS: readonly Target[] = [
   { platform: "win32-arm64", extension: "dll", compiler: ["zig", "cc", "-target", "aarch64-windows-gnu"] },
 ];
 
-const HOST_COMPILER = ["clang", ...(IS_WINDOWS ? [] : ["-fPIC"])];
+const HOST_COMPILER = ["clang", ...(IS_WINDOWS ? ["-D_CRT_SECURE_NO_WARNINGS"] : ["-fPIC"])];
 
 function withGrammarSource<T>(grammar: Grammar, build: (source: string, work: string) => T): T {
   const work = mkdtempSync(join(tmpdir(), `code-nav-${grammar.name}-`));
@@ -67,7 +67,9 @@ function compile(source: string, work: string, compiler: string[], file: string,
   run([...compiler, "-shared", "-O2", "-I", "src", "-o", built, ...sources], source);
   mkdirSync(outDir, { recursive: true });
   const target = join(outDir, file);
-  renameSync(built, target);
+  const staged = `${target}.tmp`;
+  copyFileSync(built, staged);
+  renameSync(staged, target);
   return target;
 }
 

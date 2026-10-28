@@ -59,6 +59,15 @@ export function charBeforeIdentifier(lineText: string, column: number, language:
   return chars[from - 1] ?? "";
 }
 
+function varArgumentAt(lineText: string, column: number): { column: number; name: string } | null {
+  for (const m of lineText.matchAll(/var\(\s*(--[A-Za-z0-9_-]+)/g)) {
+    const from = Array.from(lineText.slice(0, m.index)).length + 1;
+    const nameAt = Array.from(lineText.slice(0, m.index + m[0].length - m[1]!.length)).length + 1;
+    if (column >= from && column < nameAt) return { column: nameAt, name: m[1]! };
+  }
+  return null;
+}
+
 function parseNumber(text: string, what: string): number {
   if (!/^\d+$/.test(text) || Number(text) < 1) throw new ToolError(failure(`not a ${what}: ${text}`));
   return Number(text);
@@ -115,6 +124,8 @@ export function parsePosition(ctx: CommandContext, usage: string): ResolvedPosit
       const column = parseNumber(match[3], "column");
       const width = Array.from(text).length;
       if (column > width + 1) throw new ToolError(notFound(`column ${column} on ${file.path}:${line} (${width} characters)`));
+      const property = isStyleLanguage(file.language) ? varArgumentAt(text, column) : null;
+      if (property !== null) return { file, line, ...property };
       return { file, line, column, name: identifierAt(text, column, file.language) };
     }
     if (second === undefined) throw new ToolError(failure(usage));

@@ -45,7 +45,14 @@ function npmGlobalRoot(): string | null {
   const npm = resolveExecutable("npm");
   if (npm === null) return npmRoot;
   try {
-    const proc = Bun.spawnSync(spawnArgv([npm, "root", "-g"]).argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore", windowsHide: true });
+    const spawned = spawnArgv([npm, "root", "-g"]);
+    const proc = Bun.spawnSync(spawned.argv, {
+      stdout: "pipe",
+      stderr: "ignore",
+      stdin: "ignore",
+      windowsHide: true,
+      windowsVerbatimArguments: spawned.verbatim,
+    });
     const out = proc.stdout.toString().trim();
     if (proc.exitCode === 0 && out !== "") npmRoot = out;
   } catch {}

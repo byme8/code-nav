@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { AST_GREP_ENV, AST_GREP_INSTALL_COMMAND, astGrepRelease } from "./ast-grep-dist.ts";
 import { astGrepExecutable } from "./index/astgrep.ts";
+import { LANGUAGE_LABELS, readSelection, selectedLanguages, selectionPath, type LanguageId } from "./languages.ts";
 import { SCSS_GRAMMAR_ENV, scssLibraryPath } from "./index/scss.ts";
 import { PREBUILT_PLATFORM, WGSL_GRAMMAR_ENV, prebuiltGrammarDir, wgslLibraryPath } from "./index/wgsl.ts";
 import { ANGULAR_GRAMMAR_ENV, angularLibraryPath } from "./index/angular.ts";
@@ -25,9 +27,11 @@ export interface Check {
   role: Role;
   found: string | null;
   hint: string;
+  fix?: string[];
 }
 
 export interface LanguageReport {
+  id: LanguageId;
   language: string;
   checks: Check[];
   summary: string;
@@ -41,16 +45,17 @@ export interface DoctorReport {
 const IS_MAC = process.platform === "darwin";
 
 function astGrepHint(): string {
-  if (IS_WINDOWS) return "cargo install ast-grep --locked, scoop install ast-grep or winget install ast-grep";
-  if (IS_MAC) return "brew install ast-grep or cargo install ast-grep --locked";
-  return "cargo install ast-grep --locked or npm i -g @ast-grep/cli";
+  return astGrepRelease() === null ? `install ast-grep and set ${AST_GREP_ENV}` : AST_GREP_INSTALL_COMMAND;
 }
 
-const SERVER_HINTS: Record<ServerId, string> = {
-  csharp: "dotnet tool install -g csharp-ls",
-  typescript: "npm i -g typescript-language-server typescript",
-  rust: IS_MAC ? "rustup component add rust-analyzer or brew install rust-analyzer" : "rustup component add rust-analyzer",
+const SERVER_FIXES: Record<ServerId, string[]> = {
+  csharp: ["dotnet", "tool", "install", "-g", "csharp-ls"],
+  typescript: ["npm", "i", "-g", "typescript-language-server", "typescript"],
+  rust: ["rustup", "component", "add", "rust-analyzer"],
 };
+const GRAMMARS_FIX = ["code-nav", "install", "grammars"];
+const RUST_SRC_FIX = ["code-nav", "install", "rust-src"];
+const ANGULAR_LS_FIX = ["npm", "i", "-g", ANGULAR_LS_PACKAGE];
 
 const DOTNET_HINT = "install the .NET SDK (https://dotnet.microsoft.com/download)";
 const CARGO_HINT = IS_MAC ? "install Rust with rustup (https://rustup.rs) or brew install rust" : "install Rust with rustup (https://rustup.rs)";
@@ -75,7 +80,8 @@ function astGrepCheck(): Check {
   try {
     path = astGrepExecutable();
   } catch (e) {
-    return { what, role: "syntax", found: null, hint: `${(e as Error).message}; ${astGrepHint()}` };
+    const message = (e as Error).message;
+    return { what, role: "syntax", found: null, hint: message.includes(AST_GREP_INSTALL_COMMAND) ? message : `${message}; ${astGrepHint()}` };
   }
   const version = runs([path, "--version"]);
   if (version === null) return { what, role: "syntax", found: null, hint: `${path} --version failed; ${astGrepHint()}` };
@@ -87,8 +93,9 @@ function serverCheck(id: ServerId, role: Role): Check {
   const command = serverCommand(id);
   const found = resolveExecutable(command);
   const overridden = process.env[env] !== undefined && process.env[env] !== "";
-  const hint = overridden ? `${env}=${command} not found; unset it or ${SERVER_HINTS[id]}` : SERVER_HINTS[id];
-  return { what: name, role, found, hint };
+  const fix = SERVER_FIXES[id];
+  if (overridden) return { what: name, role, found, hint: `${env}=${command} not found; unset it or ${fix.join(" ")}` };
+  return { what: name, role, found, hint: fix.join(" "), fix };
 }
 
 function toolCheck(command: string, hint: string): Check {
@@ -97,8 +104,8 @@ function toolCheck(command: string, hint: string): Check {
 
 function grammarCheck(what: string, library: string, env: string): Check {
   const found = existsSync(library) ? library : null;
-  const hint = process.env[env] ? `${env}=${library} not found; unset it or ${grammarHint()}` : `${library} not found; ${grammarHint()}`;
-  return { what, role: "syntax", found, hint };
+  if (process.env[env]) return { what, role: "syntax", found, hint: `${env}=${library} not found; unset it or ${grammarHint()}` };
+  return { what, role: "syntax", found, hint: `${library} not found; ${grammarHint()}`, fix: GRAMMARS_FIX };
 }
 
 function rustSrcCheck(): Check {
@@ -115,7 +122,7 @@ function rustSrcCheck(): Check {
   const library = join(sysroot, "lib", "rustlib", "src", "rust", "library");
   return existsSync(library)
     ? { what, role: "extra", found: `${library} (toolchain sysroot)`, hint }
-    : { what, role: "extra", found: null, hint };
+    : { what, role: "extra", found: null, hint, fix: RUST_SRC_FIX };
 }
 
 function angularServerChecks(): Check[] {
@@ -123,7 +130,7 @@ function angularServerChecks(): Check[] {
   const node = nodeRuntime();
   const server: Check =
     typeof pkg === "string"
-      ? { what: ANGULAR_LS_PACKAGE, role: "lsp", found: null, hint: `${pkg}; ${ANGULAR_LS_HINT}` }
+      ? { what: ANGULAR_LS_PACKAGE, role: "lsp", found: null, hint: `${pkg}; ${ANGULAR_LS_HINT}`, fix: ANGULAR_LS_FIX }
       : { what: ANGULAR_LS_PACKAGE, role: "lsp", found: `${pkg.dir} (${pkg.version}, from ${pkg.from})`, hint: "" };
   const engines = typeof pkg === "string" ? null : pkg.engines;
   let runtime: Check;
@@ -149,21 +156,26 @@ function summarize(language: string, astGrep: Check, checks: Check[], extraNote:
   return `${language}: ready`;
 }
 
-export function diagnose(): DoctorReport {
+const LANGUAGE_CHECKS: Record<LanguageId, () => [Check[], string]> = {
+  csharp: () => [[serverCheck("csharp", "lsp"), toolCheck("dotnet", DOTNET_HINT)], ""],
+  typescript: () => [[serverCheck("typescript", "lsp")], ""],
+  graphql: () => [[serverCheck("typescript", "extra")], "no trace"],
+  css: () => [[], ""],
+  scss: () => [[grammarCheck("scss-grammar", scssLibraryPath(), SCSS_GRAMMAR_ENV)], ""],
+  rust: () => [[serverCheck("rust", "lsp"), toolCheck("cargo", CARGO_HINT), rustSrcCheck()], "std not indexed"],
+  wgsl: () => [[grammarCheck("wgsl-grammar", wgslLibraryPath(), WGSL_GRAMMAR_ENV)], ""],
+  angular: () => [[grammarCheck("angular-grammar", angularLibraryPath(), ANGULAR_GRAMMAR_ENV), ...angularServerChecks()], ""],
+};
+
+export function diagnose(ids: readonly LanguageId[] = selectedLanguages()): DoctorReport {
   const astGrep = astGrepCheck();
-  const languages: [string, Check[], string][] = [
-    ["C#", [serverCheck("csharp", "lsp"), toolCheck("dotnet", DOTNET_HINT)], ""],
-    ["TypeScript", [serverCheck("typescript", "lsp")], ""],
-    ["GraphQL", [serverCheck("typescript", "extra")], "no trace"],
-    ["CSS", [], ""],
-    ["SCSS", [grammarCheck("scss-grammar", scssLibraryPath(), SCSS_GRAMMAR_ENV)], ""],
-    ["Rust", [serverCheck("rust", "lsp"), toolCheck("cargo", CARGO_HINT), rustSrcCheck()], "std not indexed"],
-    ["WGSL", [grammarCheck("wgsl-grammar", wgslLibraryPath(), WGSL_GRAMMAR_ENV)], ""],
-    ["Angular", [grammarCheck("angular-grammar", angularLibraryPath(), ANGULAR_GRAMMAR_ENV), ...angularServerChecks()], ""],
-  ];
   return {
     astGrep,
-    languages: languages.map(([language, checks, note]) => ({ language, checks, summary: summarize(language, astGrep, checks, note) })),
+    languages: ids.map((id) => {
+      const [checks, note] = LANGUAGE_CHECKS[id]();
+      const language = LANGUAGE_LABELS[id];
+      return { id, language, checks, summary: summarize(language, astGrep, checks, note) };
+    }),
   };
 }
 
@@ -177,7 +189,8 @@ export function doctor(args: string[], out: (text: string) => void): number {
     return EXIT.error;
   }
   const report = diagnose();
-  const lines = [checkLine(report.astGrep)];
+  const selection = readSelection() === null ? "all (no selection saved)" : `${report.languages.map((l) => l.language).join(", ")} (from ${selectionPath()})`;
+  const lines = [`languages: ${selection}`, checkLine(report.astGrep)];
   for (const language of report.languages) lines.push(...language.checks.map(checkLine), language.summary);
   out(lines.join("\n"));
   return report.astGrep.found === null ? EXIT.notFound : EXIT.success;

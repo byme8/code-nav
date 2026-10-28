@@ -1,20 +1,21 @@
 import { findKeywords, isGeneratedPath } from "../index/declarations.ts";
 import type { IndexedFile, ToolLanguage } from "../index/symbols.ts";
-import { memberUnits, termsOf, type Terms } from "../index/terms.ts";
+import { memberUnits, splitWords, termsOf, type Terms } from "../index/terms.ts";
 import { failure, notFound, prefixed, success } from "../output.ts";
 import { compareBytes, type Command, type CommandContext } from "./context.ts";
 
 export const FIND_LIMIT = 10;
 export const DEMOTION = 0.5;
+export const EXACT_NAME_BOOST = 2;
 
 const LANGUAGES: readonly ToolLanguage[] = ["csharp", "typescript", "graphql", "rust", "wgsl", "css", "scss", "angular"];
 const KINDS = ["tests", "migrations", "generated"] as const;
 type FileKind = (typeof KINDS)[number];
-const TARGETS = ["file", "member"] as const;
+const TARGETS = ["file", "member", "symbol"] as const;
 type Target = (typeof TARGETS)[number];
 
 const USAGE =
-  "usage: code-nav find [--target file|member] [--lang csharp|typescript|graphql|rust|wgsl|css|scss|angular]… [--kind tests|migrations|generated]… <words…>";
+  "usage: code-nav find [--target file|member|symbol][--lang csharp|typescript|graphql|rust|wgsl|css|scss|angular]… [--kind tests|migrations|generated]… <words…>";
 
 export function fileKinds(path: string): Set<FileKind> {
   const out = new Set<FileKind>();
@@ -87,6 +88,7 @@ interface Unit {
   line: number;
   label: string | null;
   terms: Terms;
+  names: ReadonlySet<string>;
 }
 
 interface Scored {
@@ -96,27 +98,36 @@ interface Scored {
 }
 
 const memberCache = new WeakMap<IndexedFile, Unit[]>();
+const symbolCache = new WeakMap<IndexedFile, Unit[]>();
 
-function membersOf(file: IndexedFile): Unit[] {
-  let units = memberCache.get(file);
+function declarationsOf(file: IndexedFile, allSymbols: boolean): Unit[] {
+  const cache = allSymbols ? symbolCache : memberCache;
+  let units = cache.get(file);
   if (units === undefined) {
-    units = memberUnits(file).map(({ symbol, terms }) => ({
+    units = memberUnits(file, allSymbols).map(({ symbol, terms }) => ({
       path: file.path,
       line: symbol.nameLine,
       label: `${file.path}:${symbol.nameLine}:${symbol.nameColumn} ${symbol.kind} ${symbol.container === null ? "" : `${symbol.container}.`}${symbol.name}`,
       terms,
+      names: new Set([symbol.name.toLowerCase()]),
     }));
-    memberCache.set(file, units);
+    cache.set(file, units);
   }
   return units;
 }
 
 function unitsOf(ctx: CommandContext, target: Target, files: IndexedFile[]): Unit[] {
-  if (target === "member") return files.flatMap(membersOf);
-  return files.map((file) => ({ path: file.path, line: 0, label: null, terms: ctx.index.terms(file) }));
+  if (target !== "file") return files.flatMap((file) => declarationsOf(file, target === "symbol"));
+  return files.map((file) => ({
+    path: file.path,
+    line: 0,
+    label: null,
+    terms: ctx.index.terms(file),
+    names: new Set(file.symbols.map((s) => s.name.toLowerCase())),
+  }));
 }
 
-function rank(units: Unit[], queryTerms: string[], kinds: ReadonlySet<FileKind>): Scored[] {
+function rank(units: Unit[], queryTerms: string[], exactNames: readonly string[], kinds: ReadonlySet<FileKind>): Scored[] {
   const df = new Map<string, number>(queryTerms.map((t) => [t, 0]));
   for (const unit of units) for (const t of queryTerms) if (unit.terms.has(t)) df.set(t, df.get(t)! + 1);
   const out: Scored[] = [];
@@ -129,6 +140,7 @@ function rank(units: Unit[], queryTerms: string[], kinds: ReadonlySet<FileKind>)
       score += Math.log(units.length / df.get(t)!) * place;
       matched.push(t);
     }
+    if (score > 0 && exactNames.some((n) => unit.names.has(n))) score *= EXACT_NAME_BOOST;
     const unitKinds = fileKinds(unit.path);
     if (unitKinds.size > 0 && ![...unitKinds].some((k) => kinds.has(k))) score *= DEMOTION;
     if (score > 0) out.push({ unit, score, matched });
@@ -146,7 +158,8 @@ export const find: Command = {
       return failure(`${(e as Error).message}; ${USAGE}`);
     }
     if (request.words.length === 0) return failure(USAGE);
-    const queryTerms = [...new Set(findKeywords(request.words.join(" ")).flatMap(termsOf))];
+    const queryTerms = [...new Set(findKeywords(splitWords(request.words.join(" ")).join(" ")).flatMap(termsOf))];
+    const exactNames = request.words.map((w) => w.toLowerCase());
     const notes: string[] = [];
     for (const [language, label] of [["wgsl", "WGSL"], ["scss", "SCSS"], ["angular", "Angular template"]] as const) {
       const problem = request.languages.has(language) ? ctx.index.grammarProblem(language) : null;
@@ -158,7 +171,7 @@ export const find: Command = {
     const scored: Scored[] = [];
     for (const language of request.languages) {
       const units = unitsOf(ctx, request.target, ctx.index.filesOf(new Set([language])));
-      scored.push(...rank(units, queryTerms, request.kinds));
+      scored.push(...rank(units, queryTerms, exactNames, request.kinds));
     }
     if (scored.length === 0) return prefixed(notes, notFound(`no file or symbol name matches ${request.words.join(" ")}`));
     scored.sort((a, b) => b.score - a.score || compareBytes(a.unit.path, b.unit.path) || a.unit.line - b.unit.line);
