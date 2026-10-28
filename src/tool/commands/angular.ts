@@ -168,7 +168,9 @@ async function serverReferences(
     try {
       const found = await lspReferences(ctx, position, kind);
       lines.push(...found.waited);
-      if (first !== null) lines.push(unavailableNote(first, `references from typescript-language-server, ${templates}`));
+      if (first !== null && ctx.servers?.claimNote(`${first.server}:${templates}`) !== false) {
+        lines.push(unavailableNote(first, `references from typescript-language-server, ${templates}`));
+      }
       return found.locations;
     } catch (e) {
       if (!(e instanceof ServerUnavailable)) throw e;

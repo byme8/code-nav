@@ -290,7 +290,8 @@ Per file: language, stamp, and symbols `{ kind, name, start, end, nameLine, name
 - C#, TypeScript, TSX: one `ast-grep scan --json=stream` with the outline rule set from
   `src/tool/index/rules.ts` (rule id = kind) plus a declaration
   rule over the read-symbol declaration kinds (C# also `field_declaration` and record parameters;
-  TS top-level `lexical_declaration` / `variable_declaration`). Each name is paired with the
+  TS top-level `lexical_declaration` / `variable_declaration`; TS class fields,
+  `public_field_definition`, are kind `property`). Each name is paired with the
   smallest declaration node containing it: `start`/`end` are that node's lines, `nameLine` and
   `nameColumn` (1-based characters) the name's.
 - GraphQL: the declaration regexes (`src/tool/index/declarations.ts`) over the file
@@ -376,7 +377,7 @@ Symbol search: the words are matched against declared names at one of two target
 
 - `--target file`: one line per file, best first: `<path>  <score>  <matched terms>`.
 - `--target member`: one line per member declaration (C# method, constructor, property, field and
-  nested type — class record struct interface enum declared inside another type; TS class method;
+  nested type — class record struct interface enum declared inside another type; TS class method and property;
   GraphQL field), best first:
   `<path>:<line>:<col> <kind> <Owner.name>  <score>  <matched terms>` (just `<name>` when the
   member has no containing type).
@@ -403,7 +404,10 @@ Ranking (fixed before the first development run; units and places amended after 
      query mutation subscription fragment. Member names never count.
    - member: 3 in its own name, 2 in its containing type's name, 1 in a segment of its file's path.
 4. Score = Σ over matched distinct query terms of ln(N / df) × place, where N is the number of
-   units (files or members) of the unit's language and df those whose terms include the term.
+   units (files or members) of the unit's language and df those whose terms include the term,
+   then × (matched distinct query terms / query terms) — Lucene's coordination factor, so a unit
+   matching every word outranks a rarer single-word match (`access token`: a class
+   `AccessTokenService` above a template input named `token`).
 5. Kinds: `tests` (a directory segment `test`, `tests`, `__tests__` in any case, or ending
    `.Tests`, `.IntegrationTests`, `.UnitTests`; a file `*.test.ts(x)` or `*.spec.ts(x)`),
    `migrations` (a `Migrations` directory, `*.Designer.cs`, `*ModelSnapshot.cs`), `generated`
@@ -420,7 +424,9 @@ Ranking (fixed before the first development run; units and places amended after 
 The path, then `<start>-<end> <kind> <name>` per symbol in source order, indented two spaces per
 enclosing type. `start` is the name's line; `end` is the declaration's last line. Kinds: C#
 `class record struct interface enum constructor method property field`; TypeScript
-`function component class method type interface enum constant`; GraphQL
+`function component class method property type interface enum constant` (`property` is a class
+field declared in the class body, `private readonly` and `#private` included; constructor
+parameter properties are not indexed); GraphQL
 `type input enum field enum-value query mutation subscription fragment`; Rust, WGSL, CSS and SCSS kinds as in §Syntax index (an impl prints as
 `impl impl Shape for Circle`: kind, then name; a WGSL global as `var<storage> lights`). A file with no symbols prints only its path.
 
@@ -431,6 +437,7 @@ enclosing type. `start` is the name's line; `end` is the declaration's last line
 | `show <path>:<line>[:<col>] [<name>]` | The smallest symbol whose declaration contains the line (named `<name>` when given) |
 | `show <path> <name> [<line>]` | With a line: as above. Without: the symbol of that name in the file |
 | `show <name>` / `show <Owner.name>` | Every indexed symbol of that name (whose container is `Owner`) |
+| `show <path>:<from>-<to>` | The file's lines `from..to` verbatim after a `<path>:<from>-<last>` line (`last` clipped to the file's end); `to` before `from`: exit 3; `from` past the end: exit 1 |
 
 One symbol: `<path>:<start>-<end> <kind> <name>`, then the file's lines `start..end` verbatim.
 `start..end` is the whole declaration node, attributes included (GraphQL: the header or field line to its block end). Several: exit 2,
@@ -487,11 +494,19 @@ server. Only outside the root: exit 1, naming where the server pointed.
 position. Kind and name are the index symbol whose name is at that position, else the smallest
 symbol containing the line (`symbol <identifier>` when the index has none).
 
-### `callers <position>`
+### `callers [--depth N] <position>`
 
 `incomingCalls(position)`; per caller its selection start, `<path>:<line>:<col> <kind> <name>`,
 kind and name from the index as for `impls` (when the index has none: the LSP kind and the
-server's name cut at `(`).
+server's name cut at `(`). When a call site lies in a smaller indexed symbol inside the caller the
+server names — a field initializer, where typescript-language-server names the class — that symbol
+is the caller instead (`property query` for `query = this.auth.load()`, not the class).
+
+`--depth N` (1–10, default 1) asks `incomingCalls` again at each caller's position, up to N levels,
+printing each level under its callee indented two spaces per level. A caller already expanded is
+printed again with ` (callers above)` and not expanded again, so cycles and shared callers end.
+A caller the server cannot prepare a call hierarchy for (a data field, not a function-valued one)
+ends its branch. Every level is asked through the server slot of the original position's file.
 
 ### CSS and SCSS
 
@@ -586,7 +601,7 @@ Server:
 | Position | `refs` | `def` |
 |---|---|---|
 | template (`.html`, or inside an inline template) | Angular server, minus its own definition location | Angular server; empty → syntax answer |
-| `.ts` in an Angular slot | Angular server (adds template usages), else typescript-language-server with a note | Angular server first; empty or unavailable → typescript-language-server |
+| `.ts` in an Angular slot | Angular server (adds template usages), else typescript-language-server with a note (once per daemon) | Angular server first; empty or unavailable → typescript-language-server |
 | `.ts` outside a slot, on a component class or selector, pipe class, pipe name or a pipe's `transform` | as the row above, with the slot missing | typescript-language-server |
 
   `impls`, `callers` and `trace` stay on typescript-language-server; on a template they exit 3
@@ -604,8 +619,9 @@ Server:
   another name → its one TypeScript declaration in the index (several: exit 2). `refs` of a tag →
   every `<tag>` open tag in the templates; of a pipe → as above; of another name with exactly one
   TypeScript declaration in the index → the TypeScript reference scan plus every template identifier
-  of that name; otherwise exit 3 naming the server. Component properties (signal inputs) are not in
-  the index, so `refs` of `{{ prop() }}` without the server exits 3.
+  of that name; otherwise exit 3 naming the server. Component properties (signal inputs included)
+  are indexed as `property`, so `refs` of `{{ prop() }}` without the server takes the
+  one-declaration path when the name is unique.
 
 Checked on a 2,000-file Angular 21 app (2026-10-28, server 21.2.25): `def` from `{{ listing() }}`,
 `<pnyc-sparkline>`, `[data]` and an inline template's `mode()` land on the component members; `def`

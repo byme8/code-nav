@@ -157,6 +157,7 @@ export class ServerPool {
   private slots: Slot[] = [];
   private stopping = false;
   private stdNoteGiven = false;
+  private readonly notesGiven = new Set<string>();
   private index: SyntaxIndex | null = null;
 
   constructor(
@@ -225,6 +226,12 @@ export class ServerPool {
 
   hasAngular(path: string): boolean {
     return this.slotOrNull("angular", path) !== null;
+  }
+
+  claimNote(key: string): boolean {
+    if (this.notesGiven.has(key)) return false;
+    this.notesGiven.add(key);
+    return true;
   }
 
   claimStdNote(): boolean {

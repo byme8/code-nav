@@ -140,6 +140,7 @@ function rank(units: Unit[], queryTerms: string[], exactNames: readonly string[]
       score += Math.log(units.length / df.get(t)!) * place;
       matched.push(t);
     }
+    score *= matched.length / queryTerms.length;
     if (score > 0 && exactNames.some((n) => unit.names.has(n))) score *= EXACT_NAME_BOOST;
     const unitKinds = fileKinds(unit.path);
     if (unitKinds.size > 0 && ![...unitKinds].some((k) => kinds.has(k))) score *= DEMOTION;

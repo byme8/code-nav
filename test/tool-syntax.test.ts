@@ -72,7 +72,7 @@ test("find --target file ranks on file-level declarations, so a file with many m
       args: ["--lang", "csharp", "invoice", "total", "discount", "rounding", "currency", "schedule", "penalty"],
     });
     expect(reply.exitCode).toBe(0);
-    expect(reply.stdout.trimEnd().split("\n")).toEqual(["src/Billing/InvoiceTotal.cs  6.59  invoic,total"]);
+    expect(reply.stdout.trimEnd().split("\n")).toEqual(["src/Billing/InvoiceTotal.cs  1.88  invoic,total"]);
   } finally {
     rmSync(tree, { recursive: true });
   }

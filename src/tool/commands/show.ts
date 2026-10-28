@@ -6,7 +6,8 @@ import { ToolError, ambiguous, failure, notFound, success, symbolHeader, type Re
 import { compareBytes, indexedFile, looksLikePath, type Command, type CommandContext } from "./context.ts";
 import { isTemplateSymbol, styleDeclarationsNamed } from "./position.ts";
 
-const USAGE = "usage: code-nav show <path>:<line>[:<col>] [<name>] | <path> <name> [<line>] | <path> <Owner.name> | <name> | <Owner.name>";
+const USAGE =
+  "usage: code-nav show <path>:<line>[:<col>] [<name>] | <path>:<from>-<to> | <path> <name> [<line>] | <path> <Owner.name> | <name> | <Owner.name>";
 
 function parseLine(text: string): number {
   if (!/^\d+$/.test(text) || Number(text) < 1) throw new ToolError(failure(`not a line number: ${text}`));
@@ -44,11 +45,26 @@ function atLine(ctx: CommandContext, file: IndexedFile, line: number, name: stri
   return symbol === null ? notFound(what) : print(ctx, { file, symbol });
 }
 
+function lineRange(ctx: CommandContext, file: IndexedFile, from: number, to: number): Reply {
+  if (to < from) return failure(`empty line range: ${from}-${to}`);
+  const lines = readFileSync(join(ctx.root, file.path), "utf8").split("\n");
+  if (lines.length > 0 && lines.at(-1) === "") lines.pop();
+  if (from > lines.length) return notFound(`line ${from} in ${file.path} (${lines.length} lines)`);
+  const last = Math.min(to, lines.length);
+  const text = lines.slice(from - 1, last).map((l) => l.replace(/\r$/, ""));
+  return success([`${file.path}:${from}-${last}`, ...text]);
+}
+
 export const show: Command = {
   needsFreshIndex: true,
   run(ctx) {
     const [first, second, third, ...rest] = ctx.args;
     if (first === undefined || rest.length > 0) return failure(USAGE);
+    const range = /^(.+?):(\d+)-(\d+)$/.exec(first);
+    if (range !== null && looksLikePath(ctx.root, range[1]!)) {
+      if (second !== undefined) return failure(USAGE);
+      return lineRange(ctx, indexedFile(ctx, range[1]!), parseLine(range[2]!), parseLine(range[3]!));
+    }
     const position = /^(.+?):(\d+)(?::(\d+))?$/.exec(first);
     if (position !== null && looksLikePath(ctx.root, position[1]!)) {
       if (third !== undefined) return failure(USAGE);

@@ -19,7 +19,7 @@ const FILE_LEVEL_KINDS: Record<ToolLanguage, ReadonlySet<string>> = {
 
 const MEMBER_KINDS: Record<ToolLanguage, ReadonlySet<string>> = {
   csharp: new Set(["method", "constructor", "property", "field"]),
-  typescript: new Set(["method"]),
+  typescript: new Set(["method", "property"]),
   graphql: new Set(["field"]),
   rust: new Set(["method"]),
   wgsl: new Set(["field"]),

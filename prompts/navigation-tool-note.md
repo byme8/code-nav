@@ -24,12 +24,17 @@ Commands (`<pos>` is `<path>:<line>:<col>`, or `<path>:<line> <name>`, or a bare
 - `show <path> <name> [<line>]`, `show <path> <Owner.name>`, `show <path>:<line>`, `show <name>`,
   `show <Owner.name>` — one symbol: `<path>:<start>-<end> <kind> <name>`, then its lines verbatim
   (the whole declaration). Read a declaration with `show` instead of reading the file.
+  `show <path>:<from>-<to>` prints just those lines (`<path>:<from>-<to>`, then the lines) — use
+  it for a class header or a call site instead of showing the whole enclosing declaration.
 - `refs <pos>` — every reference, per file a `<path>` line then `  <line>:<col>  <text>`; the
   declaration itself is not listed (use `def` or `find --target symbol` for it).
 - `def <pos>` — the definition, `<path>:<line>:<col>  <text>`; overloads resolved. With a column,
   point it at the identifier itself (in CSS/SCSS anywhere inside `var(--x)` also works).
 - `impls <pos>` — implementing types or overriding members, `<path>:<line>:<col> <kind> <name>`.
-- `callers <pos>` — direct callers, `<path>:<line>:<col> <kind> <name>` (the calling method).
+- `callers [--depth N] <pos>` — direct callers, `<path>:<line>:<col> <kind> <name>` (the calling
+  method, or the field whose initializer makes the call). `--depth N` (1–10) also lists the
+  callers' callers up to N levels, each level indented two spaces — one call for a whole chain; a
+  caller already expanded earlier ends with ` (callers above)`.
 - `trace <pos>` — from a C# property or field through GraphQL to React:
   `<role> <path>:<line>:<col>  <text>` per link, roles in order csharp-property, schema-field,
   document-selection, generated-ts-member, service-hook, component.
