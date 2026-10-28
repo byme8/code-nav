@@ -16,6 +16,9 @@ export function sourceLanguage(path: string): ToolLanguage | null {
   if (/\.(?:graphql|gql)$/.test(path)) return "graphql";
   if (path.endsWith(".rs")) return "rust";
   if (path.endsWith(".wgsl")) return "wgsl";
+  if (path.endsWith(".css")) return "css";
+  if (path.endsWith(".scss")) return "scss";
+  if (path.endsWith(".html")) return "angular";
   return null;
 }
 
@@ -30,8 +33,32 @@ export function configOwner(path: string): ConfigOwner | null {
   return null;
 }
 
+export function gitIgnored(root: string): Set<string> {
+  let proc;
+  try {
+    proc = Bun.spawnSync(["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "ignore",
+      stdin: "ignore",
+      windowsHide: true,
+    });
+  } catch {
+    return new Set();
+  }
+  if (proc.exitCode !== 0) return new Set();
+  return new Set(
+    proc.stdout
+      .toString()
+      .split("\0")
+      .filter((path) => path !== "")
+      .map((path) => (path.endsWith("/") ? path.slice(0, -1) : path)),
+  );
+}
+
 export function walkTree(root: string): Map<string, FileStamp> {
   const out = new Map<string, FileStamp>();
+  const ignored = gitIgnored(root);
   const visit = (relDir: string): void => {
     let entries;
     try {
@@ -41,6 +68,7 @@ export function walkTree(root: string): Map<string, FileStamp> {
     }
     for (const entry of entries) {
       const rel = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
+      if (ignored.has(rel)) continue;
       if (entry.isDirectory()) {
         if (!SKIPPED_DIRECTORIES.has(entry.name)) visit(rel);
         continue;

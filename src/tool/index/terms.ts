@@ -3,12 +3,18 @@ import type { IndexedFile, ToolLanguage, ToolSymbol } from "./symbols.ts";
 export const PLACE = { fileName: 3, declaration: 2, directory: 1 } as const;
 export const MEMBER_PLACE = { name: 3, owner: 2, path: 1 } as const;
 
+const CSS_DECLARATION_KINDS: ReadonlySet<string> = new Set(["rule", "custom-property", "keyframes", "font-face"]);
+const SCSS_DECLARATION_KINDS: ReadonlySet<string> = new Set([...CSS_DECLARATION_KINDS, "variable", "mixin", "function", "placeholder"]);
+
 const FILE_LEVEL_KINDS: Record<ToolLanguage, ReadonlySet<string>> = {
   csharp: new Set(["class", "record", "struct", "interface", "enum"]),
-  typescript: new Set(["function", "component", "class", "type", "interface", "enum", "constant"]),
+  typescript: new Set(["function", "component", "class", "type", "interface", "enum", "constant", "selector", "pipe"]),
   graphql: new Set(["type", "input", "enum", "query", "mutation", "subscription", "fragment"]),
   rust: new Set(["struct", "enum", "trait", "function", "module", "type", "const", "static", "macro"]),
   wgsl: new Set(["fn", "struct", "var", "const", "override", "alias"]),
+  css: CSS_DECLARATION_KINDS,
+  scss: SCSS_DECLARATION_KINDS,
+  angular: new Set(["element"]),
 };
 
 const MEMBER_KINDS: Record<ToolLanguage, ReadonlySet<string>> = {
@@ -17,6 +23,9 @@ const MEMBER_KINDS: Record<ToolLanguage, ReadonlySet<string>> = {
   graphql: new Set(["field"]),
   rust: new Set(["method"]),
   wgsl: new Set(["field"]),
+  css: CSS_DECLARATION_KINDS,
+  scss: SCSS_DECLARATION_KINDS,
+  angular: new Set(),
 };
 
 const RUST_ASSOCIATED_KINDS: ReadonlySet<string> = new Set(["const", "type"]);

@@ -15,12 +15,12 @@ const USAGE = "usage: bun src/tool/install-global.ts [--bin-dir <dir>] [--claude
 
 const SKILL_FRONT_MATTER = `---
 name: code-nav
-description: Code navigation for C#, TypeScript/TSX, GraphQL, Rust and WGSL through the code-nav CLI — semantic references, definitions, implementations and callers from language servers, plus file/symbol search, file outlines and single-symbol reads from syntax trees. Invoke it before running rg/grep or reading whole files whenever the question is where a symbol is used, defined, implemented or called, which file declares something, what a file contains, or what one function/class/property looks like in code of those languages.
+description: Code navigation for C#, TypeScript/TSX, Angular templates, GraphQL, Rust, WGSL, CSS and SCSS through the code-nav CLI — semantic references, definitions, implementations and callers from language servers, plus file/symbol search, file outlines and single-symbol reads from syntax trees. Invoke it before running rg/grep or reading whole files whenever the question is where a symbol is used, defined, implemented or called, which file declares something, what a file contains, or what one function/class/property looks like in code of those languages.
 ---
 `;
 
 const SKILL_GUIDANCE = `Prefer \`code-nav\` over whole-file reads and broad text search for navigation questions in C#,
-TypeScript/TSX, GraphQL, Rust and WGSL code, and run it from the repository root. Fall back to
+TypeScript/TSX, Angular templates, GraphQL, Rust, WGSL, CSS and SCSS code, and run it from the repository root. Fall back to
 \`rg\`/Read for other languages, for text that is not a declared name (string literals, comments,
 config values), or when code-nav answers \`error:\`.
 `;
@@ -155,6 +155,31 @@ export function addPermission(text: string): { result: PermissionResult; text: s
   const entries = (parsed as { permissions: { allow: unknown[] } }).permissions.allow;
   if (entries.includes(PERMISSION)) return { result: "already present", text };
   return { result: "added", text: appendItem(text, allow, PERMISSION) };
+}
+
+export function removePermission(text: string): { removed: number; text: string } {
+  let removed = 0;
+  for (;;) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { removed, text };
+    }
+    const root = parseSpans(text);
+    if (root.kind !== "object" || typeof parsed !== "object" || parsed === null) return { removed, text };
+    const permissions = root.members.findLast((m) => m.key === "permissions")?.value;
+    if (permissions?.kind !== "object") return { removed, text };
+    const allow = permissions.members.findLast((m) => m.key === "allow")?.value;
+    if (allow?.kind !== "array") return { removed, text };
+    const at = allow.items.findIndex((item) => text.slice(item.start, item.end) === JSON.stringify(PERMISSION));
+    if (at < 0) return { removed, text };
+    const items = allow.items;
+    if (items.length === 1) text = `${text.slice(0, allow.start)}[]${text.slice(allow.end)}`;
+    else if (at === 0) text = `${text.slice(0, items[0]!.start)}${text.slice(items[1]!.start)}`;
+    else text = `${text.slice(0, items[at - 1]!.end)}${text.slice(items[at]!.end)}`;
+    removed++;
+  }
 }
 
 function installPermission(settingsPath: string): { line: string; ok: boolean } {

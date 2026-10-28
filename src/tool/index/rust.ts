@@ -29,11 +29,15 @@ const ASSOCIATED_PARENT: Rule = {
   inside: { any: [{ kind: "impl_item" }, { kind: "trait_item" }] },
 };
 
+function unlabeled(rule: Rule): Rule {
+  return { not: { not: rule } };
+}
+
 function named(nameKind: string, itemKinds: string[], parent: Rule): Rule {
   return {
     kind: nameKind,
     pattern: "$N",
-    inside: { field: "name", any: itemKinds.map((kind) => ({ kind })), inside: parent },
+    all: [unlabeled({ inside: { field: "name", any: itemKinds.map((kind) => ({ kind })), inside: parent } })],
   };
 }
 
@@ -54,12 +58,19 @@ const OUTLINE: RustRule[] = [
   {
     id: "impl",
     message: "impl $TRAIT for $SELF",
-    rule: { kind: "impl_item", inside: ITEM_PARENT, all: [{ has: { field: "trait", pattern: "$TRAIT" } }, { has: { field: "type", pattern: "$SELF" } }] },
+    rule: {
+      kind: "impl_item",
+      all: [unlabeled({ inside: ITEM_PARENT }), { has: { field: "trait", pattern: "$TRAIT" } }, { has: { field: "type", pattern: "$SELF" } }],
+    },
   },
   {
     id: "impl",
     message: "impl $SELF",
-    rule: { kind: "impl_item", inside: ITEM_PARENT, has: { field: "type", pattern: "$SELF" }, not: { has: { field: "trait", regex: "" } } },
+    rule: {
+      kind: "impl_item",
+      all: [unlabeled({ inside: ITEM_PARENT }), { has: { field: "type", pattern: "$SELF" } }],
+      not: { has: { field: "trait", regex: "" } },
+    },
   },
   { id: "module", message: "$N", rule: named("identifier", ["mod_item"], ITEM_PARENT) },
   {

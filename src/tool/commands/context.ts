@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
-import type { SyntaxIndex } from "../index/index.ts";
+import { isGrammarLanguage, type SyntaxIndex } from "../index/index.ts";
 import type { IndexedFile } from "../index/symbols.ts";
 import { sourceLanguage } from "../index/walk.ts";
 import type { ServerPool } from "../lsp/pool.ts";
@@ -45,12 +45,15 @@ export function looksLikePath(root: string, arg: string): boolean {
 export function indexedFile(ctx: CommandContext, arg: string): IndexedFile {
   const path = rootRelative(ctx.root, arg);
   const file = ctx.index.files.get(path);
-  if (file?.language === "wgsl") {
-    const problem = ctx.index.wgslProblem();
+  if (file !== undefined && isGrammarLanguage(file.language)) {
+    const problem = ctx.index.grammarProblem(file.language);
     if (problem !== null) throw new ToolError(failure(problem));
   }
   if (file !== undefined) return file;
   if (!existsSync(join(ctx.root, path))) throw new ToolError(notFound(`file ${path}`));
+  if (sourceLanguage(path) === "angular") {
+    throw new ToolError(failure(`not an Angular template: ${path} (the nearest package.json above it does not declare @angular/core)`));
+  }
   throw new ToolError(failure(`not a C#, TypeScript or GraphQL source file in the index: ${path}`));
 }
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { IS_WINDOWS, ipcPath } from "../platform.ts";
 
-export const TOOL_VERSION = "4c";
+export const TOOL_VERSION = "4f";
 export const DEFAULT_IDLE_MS = 30 * 60 * 1000;
 
 export interface ServerRecord {

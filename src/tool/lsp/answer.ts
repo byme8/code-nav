@@ -1,7 +1,7 @@
 import type { SyntaxIndex } from "../index/index.ts";
 import type { Location } from "./client.ts";
 import type { LspClient } from "./client.ts";
-import type { ToolSymbol } from "../index/symbols.ts";
+import { isStyleLanguage, type ToolSymbol } from "../index/symbols.ts";
 import { ToolError, failure } from "../output.ts";
 import { compareBytes, type CommandContext } from "../commands/context.ts";
 import { fileLines, type ResolvedPosition } from "../commands/position.ts";
@@ -17,8 +17,19 @@ export function serversOf(ctx: CommandContext): ServerPool {
 export function requireServerLanguage(command: string, position: ResolvedPosition): ServerLanguage {
   const language = position.file.language;
   if (language === "csharp" || language === "typescript" || language === "rust") return language;
+  if (language === "angular") {
+    if (command === "impls" || command === "callers") {
+      throw new ToolError(failure(`${command} is not supported for angular: ${position.file.path} is an Angular template, which has find, outline, show, refs and def`));
+    }
+    return language;
+  }
   if (language === "wgsl") {
     throw new ToolError(failure(`no language server for wgsl: ${position.file.path} is WGSL, which has syntax commands only (find, outline, show)`));
+  }
+  if (isStyleLanguage(language)) {
+    throw new ToolError(
+      failure(`${command} is not supported for ${language}: ${position.file.path} is ${language.toUpperCase()}, which has syntax commands only (find, outline, show, refs, def)`),
+    );
   }
   throw new ToolError(failure(`${command} needs a C# or TypeScript position; ${position.file.path} is GraphQL`));
 }
@@ -27,8 +38,9 @@ export async function ask<T>(
   ctx: CommandContext,
   position: ResolvedPosition,
   request: (client: LspClient) => Promise<T>,
+  server: ServerLanguage | null = null,
 ): Promise<{ result: T; waited: string[] }> {
-  const language = requireServerLanguage("this command", position);
+  const language = server ?? requireServerLanguage("this command", position);
   const { result, acquired } = await serversOf(ctx).run(language, position.file.path, request);
   if (acquired.stdProblem !== null) ctx.stdProblem = acquired.stdProblem;
   return { result, waited: waitedLines(acquired) };
@@ -70,9 +82,16 @@ export function insideRootSorted(locations: Location[]): Location[] {
   return out.sort((a, b) => compareBytes(a.path, b.path) || a.line - b.line || a.column - b.column);
 }
 
-export async function lspReferences(ctx: CommandContext, position: ResolvedPosition): Promise<{ locations: Location[]; waited: string[] }> {
-  const { result, waited } = await ask(ctx, position, (client) =>
-    client.references({ path: position.file.path, line: position.line, column: position.column }, false),
+export async function lspReferences(
+  ctx: CommandContext,
+  position: ResolvedPosition,
+  server: ServerLanguage | null = null,
+): Promise<{ locations: Location[]; waited: string[] }> {
+  const { result, waited } = await ask(
+    ctx,
+    position,
+    (client) => client.references({ path: position.file.path, line: position.line, column: position.column }, false),
+    server,
   );
   return { locations: insideRootSorted(result), waited };
 }

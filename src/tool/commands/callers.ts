@@ -1,4 +1,4 @@
-import { ask, insideRootSorted, symbolLines } from "../lsp/answer.ts";
+import { ask, insideRootSorted, requireServerLanguage, symbolLines } from "../lsp/answer.ts";
 import { symbolKindName } from "../lsp/symbol-kind.ts";
 import { failure, notFound, prefixed, success } from "../output.ts";
 import type { Command } from "./context.ts";
@@ -11,6 +11,7 @@ export const callers: Command = {
   async run(ctx) {
     const position = parsePosition(ctx, USAGE);
     if (position.file.language === "graphql") return failure(`callers needs a C# or TypeScript position; ${position.file.path} is GraphQL`);
+    requireServerLanguage("callers", position);
     const { result, waited } = await ask(ctx, position, (client) => client.incomingCalls(lspPosition(position)));
     const fallback = new Map(result.map((c) => [`${c.location.path}:${c.location.line}:${c.location.column}`, c]));
     const locations = insideRootSorted(result.map((c) => c.location));

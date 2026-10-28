@@ -3,8 +3,9 @@ import { dirname, join } from "node:path";
 import type { FreshnessReport } from "../daemon/freshness.ts";
 import { resolveExecutable } from "../platform.ts";
 import { LspClient, type WatchedFileChange } from "./client.ts";
-import { serverCommand } from "./servers.ts";
+import { ANGULAR_LS_NAME, angularLaunch, serverCommand, type AngularLaunch } from "./servers.ts";
 import type { ServerRecord } from "../daemon/state.ts";
+import { resolvesAngularCore } from "../index/angular.ts";
 import type { SyntaxIndex } from "../index/index.ts";
 import type { ToolLanguage } from "../index/symbols.ts";
 import { sourceLanguage, type ConfigOwner } from "../index/walk.ts";
@@ -12,19 +13,28 @@ import { ToolError, failure } from "../output.ts";
 import { stdProblem, sysrootSource } from "../rust-src.ts";
 
 export type Owner = ConfigOwner;
-export type ServerLanguage = Owner;
+export type SlotKind = Owner | "angular";
+export type ServerLanguage = SlotKind;
 
-export const SERVER_NAMES: Record<Owner, string> = {
+export const SERVER_NAMES: Record<SlotKind, string> = {
   csharp: "csharp-ls",
   typescript: "typescript-language-server",
   rust: "rust-analyzer",
+  angular: ANGULAR_LS_NAME,
 };
+
+const ALL_OWNERS: readonly Owner[] = ["csharp", "typescript", "rust"];
+
+export function serverOwner(language: ToolLanguage | null): SlotKind | null {
+  return language === "csharp" || language === "typescript" || language === "rust" || language === "angular" ? language : null;
+}
 
 const REQUEST_TIMEOUT_MS = 120_000;
 const SOLUTION_LOAD_TIMEOUT_MS = 600_000;
 const STOP_GRACE_MS = 1_500;
 const CSHARP_LOADED = /Finished loading solution/;
 const CSHARP_LOAD_TRIGGER = "CodeNavSolutionLoad";
+const ANGULAR_LOADED = "angular/projectLoadingFinish";
 const CARGO_WORKSPACE = /^\s*\[workspace\]\s*(?:#.*)?$/m;
 
 function rustAnalyzerSettings(manifest: string, sysrootSrc: string | null): Record<string, unknown> {
@@ -52,10 +62,11 @@ class Slot {
   crashes = 0;
   generation = 0;
   stdProblem: string | null = null;
+  command: string | null = null;
   unavailable: string | null;
 
   constructor(
-    readonly owner: Owner,
+    readonly owner: SlotKind,
     readonly workspace: string,
     readonly solution: string | null,
     missing: string | null = null,
@@ -75,8 +86,13 @@ export interface Acquired {
   stdProblem: string | null;
 }
 
-function executable(owner: Owner): string {
-  return serverCommand(owner);
+function executable(slot: Slot): string {
+  return slot.command ?? (slot.owner === "angular" ? "node" : serverCommand(slot.owner));
+}
+
+function angularArgs(launch: AngularLaunch, projectDir: string): string[] {
+  const probes = `${projectDir},${launch.packageDir}`;
+  return [launch.script, "--stdio", "--tsProbeLocations", probes, "--ngProbeLocations", probes];
 }
 
 function depth(path: string): number {
@@ -140,6 +156,7 @@ export class ServerPool {
   private slots: Slot[] = [];
   private stopping = false;
   private stdNoteGiven = false;
+  private index: SyntaxIndex | null = null;
 
   constructor(
     private readonly root: string,
@@ -148,7 +165,9 @@ export class ServerPool {
     private readonly onServersChanged: (servers: ServerRecord[]) => void,
   ) {}
 
-  configure(index: SyntaxIndex, owners: readonly Owner[] = ["csharp", "typescript", "rust"]): void {
+  configure(index: SyntaxIndex, configOwners: readonly Owner[] = ALL_OWNERS): void {
+    this.index = index;
+    const owners: SlotKind[] = configOwners.includes("typescript") ? [...configOwners, "angular"] : [...configOwners];
     for (const owner of owners) {
       for (const slot of this.slots.filter((s) => s.owner === owner)) this.retire(slot);
       this.slots = this.slots.filter((s) => s.owner !== owner);
@@ -163,6 +182,10 @@ export class ServerPool {
       } else if (owner === "rust") {
         for (const dir of discoverCargoRoots(this.root, index.stamps.keys())) {
           fresh.push(new Slot("rust", dir, dir === "" ? "Cargo.toml" : `${dir}/Cargo.toml`));
+        }
+      } else if (owner === "angular") {
+        for (const dir of discoverTypescriptRoots(index.stamps.keys())) {
+          if (resolvesAngularCore(join(this.root, dir), this.root)) fresh.push(new Slot("angular", dir, null));
         }
       } else {
         const roots = discoverTypescriptRoots(index.stamps.keys());
@@ -179,7 +202,7 @@ export class ServerPool {
     const out: ServerRecord[] = [];
     for (const slot of this.slots) {
       if (slot.spawned?.isRunning === true) {
-        out.push({ name: slot.name, pid: slot.spawned.pid, command: executable(slot.owner), workspace: slot.workspace });
+        out.push({ name: slot.name, pid: slot.spawned.pid, command: executable(slot), workspace: slot.workspace });
       }
     }
     return out;
@@ -192,6 +215,10 @@ export class ServerPool {
       const pid = slot.spawned?.isRunning === true ? `pid ${slot.spawned.pid}` : "no process";
       return `server ${slot.name} ${where} ${pid} ${slot.loaded ? "ready" : "starting"}`;
     });
+  }
+
+  hasAngular(path: string): boolean {
+    return this.slotOrNull("angular", path) !== null;
   }
 
   claimStdNote(): boolean {
@@ -244,11 +271,14 @@ export class ServerPool {
     }
     const bySlot = new Map<Slot, { path: string; change: WatchedFileChange }[]>();
     const add = (path: string, change: WatchedFileChange): void => {
-      const language = sourceLanguage(path);
-      if ((language !== "csharp" && language !== "typescript" && language !== "rust") || restarted.has(language)) return;
-      const slot = this.slotOrNull(language, path);
-      if (slot?.client?.isRunning !== true) return;
-      bySlot.set(slot, [...(bySlot.get(slot) ?? []), { path, change }]);
+      const owner = serverOwner(sourceLanguage(path));
+      const kinds: SlotKind[] = owner === "typescript" ? ["typescript", "angular"] : owner === null ? [] : [owner];
+      for (const kind of kinds) {
+        if (restarted.has(kind === "angular" ? "typescript" : kind)) continue;
+        const slot = this.slotOrNull(kind, path);
+        if (slot?.client?.isRunning !== true) continue;
+        bySlot.set(slot, [...(bySlot.get(slot) ?? []), { path, change }]);
+      }
     };
     for (const path of report.created) add(path, "created");
     for (const path of report.changed) add(path, "changed");
@@ -279,25 +309,24 @@ export class ServerPool {
     for (const slot of this.slots) slot.spawned?.kill();
   }
 
-  private slotOrNull(language: ToolLanguage, path: string): Slot | null {
-    if (language === "csharp") return this.slots.find((s) => s.owner === "csharp") ?? null;
-    if (language !== "typescript" && language !== "rust") return null;
+  private slotOrNull(owner: SlotKind, path: string): Slot | null {
+    if (owner === "csharp") return this.slots.find((s) => s.owner === owner) ?? null;
     let best: Slot | null = null;
     for (const slot of this.slots) {
-      if (slot.owner !== language || !within(slot.workspace, path)) continue;
+      if (slot.owner !== owner || !within(slot.workspace, path)) continue;
       if (best === null || slot.workspace.length > best.workspace.length) best = slot;
     }
     return best;
   }
 
   private slotFor(language: ToolLanguage, path: string): Slot {
-    if (language !== "csharp" && language !== "typescript" && language !== "rust") {
-      throw new ToolError(failure(`no language server for ${language}`));
-    }
-    const slot = this.slotOrNull(language, path);
+    const owner = serverOwner(language);
+    if (owner === null) throw new ToolError(failure(`no language server for ${language}`));
+    const slot = this.slotOrNull(owner, path);
     if (slot !== null) return slot;
-    const missing = language === "rust" ? "Cargo.toml" : "tsconfig.json";
-    throw new ServerUnavailable(SERVER_NAMES[language], `no ${missing} above ${path}`);
+    if (owner === "angular") throw new ServerUnavailable(SERVER_NAMES[owner], `no Angular project (a tsconfig.json resolving @angular/core) above ${path}`);
+    const missing = owner === "rust" ? "Cargo.toml" : "tsconfig.json";
+    throw new ServerUnavailable(SERVER_NAMES[owner], `no ${missing} above ${path}`);
   }
 
   private notAvailable(slot: Slot): ServerUnavailable {
@@ -328,19 +357,38 @@ export class ServerPool {
     slot.ready.catch(() => undefined);
   }
 
+  private angularOpener(slot: Slot): string | null {
+    const files = [...(this.index?.files.values() ?? [])].filter((f) => within(slot.workspace, f.path)).sort((a, b) => byBytes(a.path, b.path));
+    const component = files.find((f) => f.language === "typescript" && f.symbols.some((s) => s.kind === "selector"));
+    return (component ?? files.find((f) => f.language === "angular") ?? files.find((f) => f.language === "typescript"))?.path ?? null;
+  }
+
   private async launch(slot: Slot, generation: number): Promise<LspClient> {
-    const command = executable(slot.owner);
-    const resolved = resolveExecutable(command);
-    if (resolved === null) {
-      if (generation === slot.generation) slot.unavailable = `executable not found: ${command}`;
-      throw new Error(`executable not found: ${command}`);
-    }
     const cwd = join(this.root, slot.workspace);
+    let resolved: string | null;
+    let args: string[];
+    if (slot.owner === "angular") {
+      const launch = angularLaunch();
+      if (typeof launch === "string") {
+        if (generation === slot.generation) slot.unavailable = launch;
+        throw new Error(launch);
+      }
+      slot.command = launch.script;
+      resolved = launch.node;
+      args = angularArgs(launch, cwd);
+    } else {
+      const command = executable(slot);
+      resolved = resolveExecutable(command);
+      if (resolved === null) {
+        if (generation === slot.generation) slot.unavailable = `executable not found: ${command}`;
+        throw new Error(`executable not found: ${command}`);
+      }
+      const prefix = slot.workspace === "" ? 0 : slot.workspace.length + 1;
+      args = slot.owner === "csharp" ? ["--solution", slot.solution!.slice(prefix)] : slot.owner === "typescript" ? ["--stdio"] : [];
+    }
     let markLoaded = (): void => undefined;
     const loaded = new Promise<void>((resolve) => (markLoaded = resolve));
     const rustStatus = { health: "", message: "" };
-    const prefix = slot.workspace === "" ? 0 : slot.workspace.length + 1;
-    const args = slot.owner === "csharp" ? ["--solution", slot.solution!.slice(prefix)] : slot.owner === "typescript" ? ["--stdio"] : [];
     let rustSettings: Record<string, unknown> | undefined;
     if (slot.owner === "rust") {
       const source = sysrootSource(cwd);
@@ -367,6 +415,7 @@ export class ServerPool {
             }),
         onNotification: (method, params) => {
           if (slot.owner === "csharp" && method === "window/logMessage" && CSHARP_LOADED.test(String(params?.message ?? ""))) markLoaded();
+          if (slot.owner === "angular" && method === ANGULAR_LOADED) markLoaded();
           if (slot.owner === "rust" && method === "experimental/serverStatus" && params?.quiescent === true) {
             rustStatus.health = String(params.health ?? "");
             rustStatus.message = String(params.message ?? "").trim();
@@ -399,16 +448,21 @@ export class ServerPool {
     this.log(`started ${slot.name} pid ${client.pid} in ${slot.workspace === "" ? "." : slot.workspace}`);
     this.publish();
     void client.waitForExit().then((code) => this.exited(slot, client, generation, code));
-    if (slot.owner === "csharp" || slot.owner === "rust") {
+    const opener = slot.owner === "angular" ? this.angularOpener(slot) : null;
+    if (slot.owner === "csharp" || slot.owner === "rust" || opener !== null) {
       if (slot.owner === "csharp") {
         client.request("workspace/symbol", { query: CSHARP_LOAD_TRIGGER }, SOLUTION_LOAD_TIMEOUT_MS).catch(() => undefined);
+      }
+      if (opener !== null) {
+        this.log(`${slot.name} opening ${opener} to load the project`);
+        await client.open(opener);
       }
       const outcome = await Promise.race([
         loaded.then(() => "loaded" as const),
         client.waitForExit().then(() => "exited" as const),
         sleep(SOLUTION_LOAD_TIMEOUT_MS).then(() => "timeout" as const),
       ]);
-      if (outcome === "exited") throw new Error(`exited while loading ${slot.solution}`);
+      if (outcome === "exited") throw new Error(`exited while loading ${slot.solution ?? opener}`);
       const giveUp = (reason: string): Error => {
         if (generation === slot.generation) {
           slot.unavailable = reason;
@@ -421,7 +475,7 @@ export class ServerPool {
         return new Error(reason);
       };
       if (outcome === "timeout") {
-        const what = slot.owner === "csharp" ? "solution load" : "workspace load";
+        const what = slot.owner === "csharp" ? "solution load" : slot.owner === "angular" ? "project load" : "workspace load";
         throw giveUp(`${what} did not finish in ${SOLUTION_LOAD_TIMEOUT_MS / 1000} s`);
       }
       if (slot.owner === "rust" && rustStatus.health === "error") {
@@ -429,7 +483,7 @@ export class ServerPool {
       }
       if (slot.owner === "rust" && generation === slot.generation) slot.stdProblem = stdProblem(rustStatus.message);
       const health = slot.owner === "rust" && rustStatus.health !== "ok" ? ` (health ${rustStatus.health}: ${rustStatus.message.replace(/\s+/g, " ")})` : "";
-      this.log(`${slot.name} loaded ${slot.solution} in ${((performance.now() - t0) / 1000).toFixed(1)} s${health}`);
+      this.log(`${slot.name} loaded ${slot.solution ?? opener} in ${((performance.now() - t0) / 1000).toFixed(1)} s${health}`);
     }
     if (generation === slot.generation) slot.loaded = true;
     return client;

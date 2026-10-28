@@ -5,10 +5,11 @@ import { runDaemon } from "./daemon/server.ts";
 import { resolveRoot } from "./daemon/state.ts";
 import { install } from "./install.ts";
 import { doctor } from "./doctor.ts";
+import { uninstall } from "./uninstall.ts";
 
 const USAGE = [
   "usage: code-nav [--root <dir>] <command> …",
-  "  find [--target file|member] [--lang csharp|typescript|graphql|rust|wgsl]… [--kind tests|migrations|generated]… <words…>",
+  "  find [--target file|member] [--lang csharp|typescript|graphql|rust|wgsl|css|scss]… [--kind tests|migrations|generated]… <words…>",
   "  outline <path>",
   "  show <path>:<line>[:<col>] [<name>] | <path> <name> [<line>] | <name> | <Owner.name>",
   "  refs | def [--schema <path>] <path>:<line>:<col> | <path>:<line> <name> | <name> | <Owner.name>",
@@ -17,6 +18,7 @@ const USAGE = [
   "  status | stop",
   "  install rust-src",
   "  doctor",
+  "  uninstall [--bin-dir <dir>] [--claude-home <dir>]",
 ];
 
 const output: string[] = [];
@@ -49,6 +51,7 @@ async function main(argv: string[]): Promise<number> {
   }
   if (command === "install") return await install(args.slice(1), write);
   if (command === "doctor") return doctor(args.slice(1), write);
+  if (command === "uninstall") return await uninstall(args.slice(1), write);
   let root: string;
   try {
     root = resolveRoot(rootOption, process.cwd());

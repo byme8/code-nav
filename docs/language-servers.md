@@ -1,6 +1,6 @@
 # Language servers
 
-How the navigation tool talks to csharp-ls, typescript-language-server and rust-analyzer
+How the navigation tool talks to csharp-ls, typescript-language-server, rust-analyzer and the Angular language server
 (`src/tool/lsp/`).
 
 ## Client — `src/tool/lsp/client.ts`
@@ -120,3 +120,37 @@ servers). Installed by Homebrew (`/opt/homebrew/bin/rust-analyzer`,
 - Standard library: without a complete `rust-src` and the library's dependencies in `CARGO_HOME`,
   `std`, `core` and `alloc` load partly or not at all, so definitions into them and types that flow
   through them do not resolve; `navigation-tool.md` §Language servers and §`install rust-src`.
+
+## Angular language server
+
+npm `@angular/language-server` 21.2.25 (bundles `@angular/language-service` 21.2.25 and TypeScript
+5.9.3; source: angular/angular `vscode-ng-language-service/server`). Started by the pool beside
+typescript-language-server (`navigation-tool.md` §Angular).
+
+- Command: `node <package>/index.js --stdio --tsProbeLocations <project dir>,<package dir>
+  --ngProbeLocations <project dir>,<package dir>`; cwd and workspace root = the project (TypeScript
+  root) directory. Both probe lists are required: they are where the server looks for `typescript`
+  and `@angular/language-service`. No `initializationOptions`, no configuration; the server sends no
+  requests to the client.
+- Capabilities used: `definition`, `references`. It has no `documentSymbol`, `workspace/symbol`,
+  `implementation` or call hierarchy, so `impls`/`callers` stay on typescript-language-server.
+- Readiness: a project loads when a file is opened; the server then sends `angular/projectLoadingStart`
+  and `angular/projectLoadingFinish` (tsserver's ProjectLoadingStart/FinishEvent). On the test app
+  the finish came about 5 s after start, first correct answers 5.7–8.8 s, warm answers 2–44 ms; about
+  1.5 GB RSS for one `node` process with no children; `shutdown` plus the group kill leaves nothing.
+- `.html` documents open with languageId `html` (`LANGUAGE_IDS` in `client.ts`). Open them under the
+  realpath'd root: with `/var` vs `/private/var` spellings mixed the answers were empty.
+- Definition is answered only in an Angular context (`isInAngularContext`): on a plain TypeScript
+  position it returns an empty list by design, so the tool falls back to typescript-language-server.
+- References include the declaration even with `includeDeclaration: false`; the tool drops the asked
+  position and, from a template, the server's own definition location.
+- Pipes: references on a pipe class miss its `| name` template usages, and references on `transform`
+  return every pipe's `transform` across Angular itself (1604 locations on the test app). The tool
+  never asks references on `transform` and adds a syntax scan of `| name` instead.
+
+## No server for CSS and SCSS
+
+CSS and SCSS have no language server: vscode-css-language-server resolves references and definitions
+only inside the asked document (vscode-css-languageservice v6.3.10 `src/services/cssNavigation.ts`),
+so the tool answers their `refs`/`def` from the syntax index across all files instead
+(`navigation-tool.md` §CSS and SCSS).

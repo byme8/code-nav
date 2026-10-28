@@ -7,14 +7,14 @@ import { compareBytes, type Command, type CommandContext } from "./context.ts";
 export const FIND_LIMIT = 10;
 export const DEMOTION = 0.5;
 
-const LANGUAGES: readonly ToolLanguage[] = ["csharp", "typescript", "graphql", "rust", "wgsl"];
+const LANGUAGES: readonly ToolLanguage[] = ["csharp", "typescript", "graphql", "rust", "wgsl", "css", "scss", "angular"];
 const KINDS = ["tests", "migrations", "generated"] as const;
 type FileKind = (typeof KINDS)[number];
 const TARGETS = ["file", "member"] as const;
 type Target = (typeof TARGETS)[number];
 
 const USAGE =
-  "usage: code-nav find [--target file|member] [--lang csharp|typescript|graphql|rust|wgsl]… [--kind tests|migrations|generated]… <words…>";
+  "usage: code-nav find [--target file|member] [--lang csharp|typescript|graphql|rust|wgsl|css|scss|angular]… [--kind tests|migrations|generated]… <words…>";
 
 export function fileKinds(path: string): Set<FileKind> {
   const out = new Set<FileKind>();
@@ -148,11 +148,12 @@ export const find: Command = {
     if (request.words.length === 0) return failure(USAGE);
     const queryTerms = [...new Set(findKeywords(request.words.join(" ")).flatMap(termsOf))];
     const notes: string[] = [];
-    const wgslProblem = request.languages.has("wgsl") ? ctx.index.wgslProblem() : null;
-    if (wgslProblem !== null) {
-      if (request.explicitLanguages) return failure(wgslProblem);
-      request.languages.delete("wgsl");
-      if (ctx.index.filesOf(new Set(["wgsl"])).length > 0) notes.push(`note: ${wgslProblem}; WGSL files not ranked`);
+    for (const [language, label] of [["wgsl", "WGSL"], ["scss", "SCSS"], ["angular", "Angular template"]] as const) {
+      const problem = request.languages.has(language) ? ctx.index.grammarProblem(language) : null;
+      if (problem === null) continue;
+      if (request.explicitLanguages) return failure(problem);
+      request.languages.delete(language);
+      if (ctx.index.filesOf(new Set([language])).length > 0) notes.push(`note: ${problem}; ${label} files not ranked`);
     }
     const scored: Scored[] = [];
     for (const language of request.languages) {

@@ -4,16 +4,20 @@ A command-line tool an agent calls through the shell, backed by one warm
 daemon per working tree. Syntax commands (`find`, `outline`, `show`) answer from an in-memory
 index built with ast-grep and the GraphQL declaration regexes. Language-server commands (`refs`,
 `def`, `impls`, `callers`) answer C#, TypeScript/TSX and Rust from csharp-ls,
-typescript-language-server and rust-analyzer running warm inside the same daemon. GraphQL `refs` and `def` answer
+typescript-language-server and rust-analyzer running warm inside the same daemon; CSS/SCSS `refs`
+and `def` answer from the syntax index, with no language server. GraphQL `refs` and `def` answer
 from an in-memory parse of the root schema and the GraphQL documents (`src/tool/graphql/`), and
 `trace` combines that parse with typescript-language-server references.
 
 The usage note agents get is `prompts/navigation-tool-note.md`.
 
 Languages are a tool-level type (`ToolLanguage` in `src/tool/index/symbols.ts`):
-`csharp | typescript | graphql` (`src/tool/language.ts`) plus `rust` and `wgsl`. Rust and WGSL
+`csharp | typescript | graphql` (`src/tool/language.ts`) plus `rust`, `wgsl`, `css` (`.css`) and
+`scss` (`.scss`), and `angular` (Angular templates: `.html` files, §Angular). Rust and WGSL
 are checked on a pinned public repository, see §Rust demo and §WGSL demo. WGSL has syntax commands only (`find`, `outline`, `show`); there is
-no WGSL language server.
+no WGSL language server. CSS and SCSS have the syntax commands plus syntax-index `refs` and `def`
+(§CSS and SCSS) and no language server;
+Less is not supported.
 
 ## Build and run
 
@@ -27,7 +31,9 @@ no WGSL language server.
 - The daemon is the same program with the hidden `daemon <root> <hash>` subcommand; nothing else
   starts it.
 - Runtime dependency: the `ast-grep` CLI (0.45.3) on `PATH`, run by the daemon only.
-- WGSL grammar: `bun src/tool/grammars.ts` (network; never a test) shallow-clones
+- Grammars: `bun src/tool/grammars.ts` (network; never a test) builds the WGSL, SCSS and Angular
+  grammars, one line per library with its size and sha256.
+- WGSL grammar: `bun src/tool/grammars.ts` shallow-clones
   tree-sitter-grammars/tree-sitter-wgsl-bevy at commit `d9306a798ede627001a8e5752f775858c8edd7e4`
   (tag `v0.1.4`; WGSL plus Bevy-style `#import`/`#define_import_path`/`#ifdef`/`#ifndef`/`#else`/`#endif`)
   into a temp dir, checks `git rev-parse HEAD`, compiles `src/parser.c` and
@@ -42,6 +48,30 @@ no WGSL language server.
   it writes to `<os.tmpdir()>/code-nav/grammars/<first 16 hex of sha256(library path)>/` and passes
   as `ast-grep scan --config`. Only `.wgsl` files are scanned with that config, in their own
   `ast-grep scan`, so a tree without `.wgsl` files never touches the grammar.
+- SCSS grammar: the same command builds it right after WGSL (`GRAMMARS` in `src/tool/grammars.ts`):
+  tree-sitter-grammars/tree-sitter-scss at commit `eb69c8f55ecc17235f43358c65ec644578554f92` (tag
+  `v1.0.0`) into `data/grammars/scss.dylib` (`scss.so`, `scss.dll`; about 200 KB). That repository
+  is the maintained one (the original serenadeai/tree-sitter-scss has had no push since 2022); every
+  later commit up to 2026-10-05 only touches CI, docs and bindings except the last, `5da5ba7`, which
+  regenerates the parser with tree-sitter 0.27 (a breaking, unreleased change), so the tag is pinned.
+  Path: `CODE_NAV_SCSS_GRAMMAR` if set, else `data/grammars/` as for WGSL (`scssLibraryPath()` in
+  `src/tool/index/scss.ts`); custom language `scss` with `languageSymbol: tree_sitter_scss`,
+  `extensions: [scss]`, its own `sgconfig.yml` under the same temp directory scheme, and only `.scss`
+  files in that scan. Without the config ast-grep's built-in `Css` would claim `.scss` files too.
+- CSS needs no extra grammar: `.css` files go through the main `ast-grep scan` with ast-grep's built-in
+  `Css` language.
+- Angular grammar: built third, dlvandenberg/tree-sitter-angular at commit
+  `1446e647e50df96f6d4b1039f121b10b5c2b2976` (tag `v0.9.2`, 2026-05-15) into
+  `data/grammars/angular.dylib` (`angular.so`, `angular.dll`; about 150 KB). It is the only maintained
+  tree-sitter grammar for Angular templates (control flow `@if`/`@for`/`@switch`/`@defer`/`@let`,
+  bindings, pipes, ICU); it extends tree-sitter-html, but its `src/` ships the generated parser and its
+  own scanner with the HTML tag tables (`tag.h`), so `parser.c` + `scanner.c` compile alone. The only
+  commit after the tag (`38a8014`) touches `queries/highlights.scm`. ABI 15, loaded by ast-grep 0.45.3.
+  Path: `CODE_NAV_ANGULAR_GRAMMAR` if set, else `data/grammars/` (`angularLibraryPath()` in
+  `src/tool/index/angular.ts`); custom language `angular` (`languageSymbol: tree_sitter_angular`,
+  `extensions: [html]`) plus a `languageInjections` entry that parses the `template:` string of a
+  `@Component` decorator in TypeScript as `angular` (ast-grep reports those matches in the `.ts` file's
+  own lines and columns).
 
 ### Global install
 
@@ -55,7 +85,7 @@ machine; re-running it is how the installed tool is updated after a change here.
   executable whose file was rewritten in place, exit 137). A failed build removes the temp file,
   leaves the old binary untouched and exits 1 naming the failure.
 - Writes `<claude-home>/skills/code-nav/SKILL.md`: front matter (`name: code-nav`, a description
-  naming the navigation tasks and the five languages), when to prefer code-nav over `rg`/Read, then
+  naming the navigation tasks and the seven languages), when to prefer code-nav over `rg`/Read, then
   `prompts/navigation-tool-note.md` verbatim. Other
   skills are not touched.
 - Adds `Bash(code-nav:*)` to `permissions.allow` in `<claude-home>/settings.json` by textual
@@ -82,7 +112,8 @@ directory, so it only ever sees and stops the daemon it started.
   socket), `daemon.json` (`{ pid, root, version, startedAt, servers }`, where `servers` lists every
   running language server as `{ name, pid, command, workspace }` — from the moment its process is
   spawned, before `initialize` answers — and is rewritten whenever one starts or stops), `daemon.log`, one log per language server (`csharp-ls.log`,
-  `typescript-language-server-<workspace>.log`, `rust-analyzer[-<workspace>].log`) and, while a CLI is starting the daemon,
+  `typescript-language-server-<workspace>.log`, `rust-analyzer[-<workspace>].log`) and, while a
+  CLI is starting the daemon,
   `start.lock`.
 - Protocol: one connection per request; the CLI writes `{ argv, cwd }` as JSON and half-closes, the
   daemon answers `{ exitCode, stdout }` and closes. The CLI prints `stdout` and exits with
@@ -132,7 +163,9 @@ with `ps` that each PID still runs that server's command (`killDaemonTree` in
   to its own directory, and each distinct directory is one slot (vello: one, the root). A `.rs` file
   goes to the slot with the longest workspace prefix of its path; none above it →
   `rust-analyzer not available: no Cargo.toml above <path>`. A tree without any `Cargo.toml` has no
-  rust-analyzer slot at all, so `status` of a C#/TypeScript tree is unchanged. Locations are
+  rust-analyzer slot at all, so `status` of a C#/TypeScript tree is unchanged. One Angular language
+  server per TypeScript root that resolves `@angular/core` (§Angular). CSS and SCSS have
+  no server (`language-servers.md` §No server for CSS and SCSS). Locations are
   reported relative to the tree root.
 - Start: every server starts in the background once the daemon listens; a command that needs one
   waits for it. Executables are `~/.dotnet/tools/csharp-ls`, `typescript-language-server` and
@@ -197,14 +230,20 @@ with `ps` that each PID still runs that server's command (`killDaemonTree` in
   with `error: no language server for wgsl: <path> is WGSL, which has syntax commands only (find,
   outline, show)` — no syntax fallback, not even for `refs`. The pool has no WGSL slot and `status`
   lists none.
+- CSS/SCSS have no language server either: `impls` and `callers` exit 3 with `error: impls is not
+  supported for css: <path> is CSS, which has syntax commands only (find, outline, show, refs, def)`
+  (`callers`, `scss`/`SCSS` likewise); `refs` and `def` answer from the syntax index (§CSS and
+  SCSS). The pool has no CSS slot and `status` lists none.
 - `status` adds one line per server: `server <name> <workspace> pid <pid> ready|starting` or
   `server <name> <workspace> not available: <reason>`.
 
 ## Freshness
 
-Before every `find`, `outline` and `show` the daemon walks the root (skipping `.git`,
-`node_modules`, `bin`, `obj`), stats every source file (`.cs`, `.ts`, `.tsx`, `.mts`, `.cts`,
-`.graphql`, `.gql`, `.rs`) and project configuration file (`*.csproj *.sln *.slnx Directory.*.props
+Before every `find`, `outline` and `show` the daemon walks the root, skipping `.git`,
+`node_modules`, `bin`, `obj` and every path git reports as ignored (`git ls-files --others --ignored
+--exclude-standard --directory`; tracked files are always walked, and outside a git repository only
+the fixed list applies), stats every source file (`.cs`, `.ts`, `.tsx`, `.mts`, `.cts`,
+`.graphql`, `.gql`, `.rs`, `.wgsl`, `.css`, `.scss`, `.html`) and project configuration file (`*.csproj *.sln *.slnx Directory.*.props
 Directory.*.targets global.json nuget.config` for C#; `package.json package-lock.json
 tsconfig*.json` for TypeScript; `Cargo.toml Cargo.lock` for Rust), and compares mtime, size and inode with its snapshot. Created and
 changed source files are re-parsed (one ast-grep run over just those files; GraphQL in memory),
@@ -283,8 +322,26 @@ Per file: language, stamp, and symbols `{ kind, name, start, end, nameLine, name
   usual and, when the tree has `.wgsl` files, prints `note: <that message>; WGSL files not ranked`
   first. Every other language keeps working. Once the library appears, the next command's freshness
   pass parses the waiting files.
+- CSS: the main `ast-grep scan` with tool-owned rules in `src/tool/index/css.ts` over ast-grep's
+  built-in `Css`. Kinds: `rule` (a rule set; name = its selector list, whitespace collapsed, so
+  `.button,\n.button--primary` is `.button, .button--primary`; name position = the selector start),
+  `custom-property` (a `--x` declaration at any level, `:root` or a rule), `keyframes` (the
+  keyframes name), `media` and `supports` (name = the condition text, `(max-width: 600px)`; name
+  position = the `@` keyword), `font-face` (name = the `font-family` value unquoted, else
+  `font-face`), `import` (name = the imported URL or string). Nested rules (CSS nesting, `&`
+  selectors) are listed under their parent. Range: the whole rule set / statement / declaration.
+- SCSS: a separate `ast-grep scan` with the same rules over the custom language `scss`
+  (§Build and run), plus `variable` (a `$x: …` declaration at any level, name with the `$`),
+  `mixin`, `function`, `placeholder` (a rule whose selector is a lone `%x`; name with the `%`),
+  `use` and `forward` (named like `import`). Known grammar gaps (pinned commit): a Sass map value
+  `(key: $v, …)` is a parse error, so variables used inside it are not seen by the reference scan; and
+  `@extend %x;` swallows the declaration after it into the extend statement (that declaration's
+  `var(--y)` is then not a reference). Neither breaks the outline.
+- SCSS grammar missing (or failing to load): as for WGSL, with `SCSS grammar not available: …` /
+  `SCSS grammar not usable: …`, `CODE_NAV_SCSS_GRAMMAR`, and `note: …; SCSS files not ranked`.
 - `container` is the nearest enclosing type (C# class, record, struct, interface, enum; TS class;
-  GraphQL type, input, enum; Rust `impl`, `trait`, `module`; WGSL struct). A Rust item inside an `impl` gets the
+  GraphQL type, input, enum; Rust `impl`, `trait`, `module`; WGSL struct; CSS `rule`, `media`,
+  `supports`; SCSS those plus `placeholder`, `mixin`, `function`). A Rust item inside an `impl` gets the
   impl's self type as container (`impl Shape for Circle` → `Circle`, generics and path dropped), so
   `Circle.area` names the method and `find --target member` labels it `Circle.area`.
 - `find` units for Rust: file level (`--target file`) are `struct enum trait function module type
@@ -292,6 +349,11 @@ Per file: language, stamp, and symbols `{ kind, name, start, end, nameLine, name
   `method` plus those associated consts and types. `impl` blocks are outline-only.
 - `find` units for WGSL: file level are `fn struct var const override alias` (a `var` of any
   address space); members are struct `field`s, labelled `Struct.field`.
+- `find` units for CSS: file level and members are both `rule custom-property keyframes font-face`
+  at any depth (SCSS adds `variable mixin function placeholder`); `media`, `supports` and imports
+  never count. The term rule splits selectors and names at their punctuation, so `.button--primary`
+  gives `button`, `primary`, `--brand-color` gives `brand`, `color`, `$base-gap` gives `bas`, `gap`.
+  A member is labelled `<container>.<name>` like any other (`:root.--brand-color`).
 
 ## Commands, input forms and output
 
@@ -339,9 +401,9 @@ Ranking (fixed before the first development run; units and places amended after 
    `migrations` (a `Migrations` directory, `*.Designer.cs`, `*ModelSnapshot.cs`), `generated`
    (`isGeneratedPath`). A file of any kind (and every member in it) scores × 0.5 unless `--kind` names one of its kinds
    (repeatable or comma-separated). Only the option switches this, never the query words.
-6. `--lang csharp|typescript|graphql|rust|wgsl` (repeatable or comma-separated) limits the units;
-   default all. Each language is ranked over its own units, so a tree without `.rs` or `.wgsl`
-   files ranks exactly as before Rust and WGSL existed. (A language with a single file scores 0 for
+6. `--lang csharp|typescript|graphql|rust|wgsl|css|scss|angular` (repeatable or comma-separated) limits the units;
+   default all. Each language is ranked over its own units, so a tree without `.rs`, `.wgsl`,
+   `.css` or `.scss` files ranks exactly as before those languages existed. (A language with a single file scores 0 for
    every term, ln(1/1), so it never ranks.)
 7. Ties by path in byte order, then by line.
 
@@ -351,7 +413,7 @@ The path, then `<start>-<end> <kind> <name>` per symbol in source order, indente
 enclosing type. `start` is the name's line; `end` is the declaration's last line. Kinds: C#
 `class record struct interface enum constructor method property field`; TypeScript
 `function component class method type interface enum constant`; GraphQL
-`type input enum field enum-value query mutation subscription fragment`; Rust and WGSL kinds as in §Syntax index (an impl prints as
+`type input enum field enum-value query mutation subscription fragment`; Rust, WGSL, CSS and SCSS kinds as in §Syntax index (an impl prints as
 `impl impl Shape for Circle`: kind, then name; a WGSL global as `var<storage> lights`). A file with no symbols prints only its path.
 
 ### `show`
@@ -377,6 +439,12 @@ None: exit 1.
 | `<path>:<line> <name>` | The first whole-word `<name>` on that line |
 | `<name>` / `<Owner.name>` | The name of the one indexed declaration of that name (whose container is `Owner`). A constructor is dropped when its own type is also a candidate. Several: exit 2, `ambiguous: <input>`, then `<path>:<line>:<col> <kind> <name>` per declaration, by path then position. None: exit 1 `not found: declaration of <input>` |
 
+In a `.css`/`.scss` file a name also takes `-` and `%` (besides letters, digits, `_` and `$`), so a
+position inside `var(--brand-color)` names `--brand-color` and one inside `$base-gap` names `$base-gap`.
+A bare `<name>` is first looked up as a whole among CSS/SCSS symbols (so `.card` or `--brand-color`
+is not split at `.`); only when none is named so does the `<Owner.name>` rule apply. `show <name>`
+does the same.
+
 A line past the file's end or a column past the line's end exits 1. On a GraphQL position `refs`
 and `def` answer by the GraphQL rules below; `impls` and `callers` exit 3 (`… needs a C# or
 TypeScript position` — wording kept from before Rust, which they also accept).
@@ -396,7 +464,8 @@ language (constructors as above), the answer is every identifier occurrence of t
 language's indexed files — the ast-grep `reference` rule from `src/tool/index/rules.ts`;
 for Rust the tool's own rule over `identifier type_identifier field_identifier
 shorthand_field_identifier` (`rustReferenceRuleText` in `src/tool/index/rust.ts`) — minus the declaration's own name, with the first line `note: <server> not available; syntax
-references of a unique name`, then the same grouping. Otherwise exit 3 naming the server.
+references of a unique name`, then the same grouping. Otherwise exit 3 naming the server. CSS and
+SCSS never ask a server, §CSS and SCSS.
 
 ### `def <position>`
 
@@ -415,6 +484,128 @@ symbol containing the line (`symbol <identifier>` when the index has none).
 `incomingCalls(position)`; per caller its selection start, `<path>:<line>:<col> <kind> <name>`,
 kind and name from the index as for `impls` (when the index has none: the LSP kind and the
 server's name cut at `(`).
+
+### CSS and SCSS
+
+CSS and SCSS have no language server (vscode-css-language-server resolves references and
+definitions only inside the asked document, `language-servers.md` §No server for CSS and SCSS);
+`refs` and `def` answer from the syntax index and an ast-grep scan across every indexed `.css`
+file (built-in `Css`) and `.scss` file (the `scss` grammar). The position's name picks the kind
+(`styleTarget` in `src/tool/commands/style.ts`, rules `styleReferenceRuleText` in
+`src/tool/index/css.ts`):
+
+| Name | Declarations (`def`, and the uniqueness check of `refs`) | References |
+|---|---|---|
+| `--x` | `custom-property` `--x` | `property_name`, `plain_value` or `identifier` `--x` (declarations and `var(--x)`), CSS and SCSS |
+| `$x` | `variable` `$x` | SCSS `variable` or `property_name` `$x` (also `ns.$x`) |
+| `%x` | `placeholder` `%x` | SCSS `placeholder` `%x` (`@extend %x`) |
+| preceded by `.`, or a bare `.x` | every `rule` whose selector contains `.x` as a whole class name | `class_name` inside a `class_selector`, CSS and SCSS |
+| a `mixin` name | `mixin` | the name of an `@include` |
+| a `function` name | `function` | a `function_name` (any call) |
+| a `keyframes` name | `keyframes` | a `plain_value` in an `animation`/`animation-name` declaration, CSS and SCSS |
+
+Checked in that order; a name matching none (a plain property name, an undeclared function) exits 1
+`not found: declaration of <name> at <path>:<line>:<col>` (`def`: `not found: definition of …`).
+When the position is on the name line of one of several declarations (at or after its name
+column), that declaration is the one meant.
+
+- `def`: one declaration → `<path>:<line>:<col>  <line text>` at its name, as for the other
+  languages; several → exit 2, `ambiguous: <name>` (`.x` for a class), then
+  `<path>:<line>:<col> <kind> <name>` per declaration by path then position; none → exit 1.
+- `refs`: every match of the kind's rule, the declaration's own name dropped, grouped as above.
+  Except for classes it needs exactly one declaration: several → exit 2 with the same candidates,
+  none → exit 1. Class references are every textual use of the class name, selectors included, so
+  their answer starts with `note: textual matches of the class name .x`.
+- With the SCSS grammar not available, `.scss` files are not scanned and `refs` adds
+  `note: <problem>; SCSS files not scanned` when the tree has any.
+
+### Angular
+
+Angular has two halves: syntax from the Angular grammar (always, no server) and
+`@angular/language-server` when it is installed. Code: `src/tool/index/angular.ts`,
+`src/tool/commands/angular.ts`, the Angular slot in `src/tool/lsp/pool.ts`.
+
+- Templates: an `.html` file is indexed (language `angular`) when the nearest `package.json` above it
+  declares `@angular/core` in `dependencies`, `devDependencies` or `peerDependencies`; other `.html`
+  files are walked (stamped) but not indexed, and `outline` of one says `not an Angular template`.
+  Chosen over "files named by a `templateUrl`" because it needs no TypeScript parse before the
+  template's own, and a `package.json` change re-classifies every `.html` file at the next scan. Inline
+  templates: the `template:` string of a `@Component` decorator, through the grammar's injection.
+- TypeScript decorator symbols (main scan, `DECORATOR_RULES`): `selector` (the `selector:` string of
+  `@Component`/`@Directive`), `pipe` (the `name:` of `@Pipe`) and `template` (the `template:` key of
+  `@Component`). Their range is the decorator, their container the class right after it, and that
+  class's range starts at the decorator, so `show <Class>` prints the decorator too. `selector` and
+  `pipe` count as file-level names for `find`.
+- Template kinds: `element` (an element whose tag contains `-` and does not start `ng-`, named by the
+  tag), `block` (every `@if @else @else if @for @empty @switch @case @default @defer @placeholder
+  @loading @error` block, named `@<keyword> <parenthesised header>`, e.g. `@for item of items; track
+  item.id`, plus legacy `*ngIf="x"` as `*ngIf x`), `let` (`@let` name), `template-ref` (`#name`),
+  and on custom elements only `input` (`[x]`), `output` (`(x)`), `two-way` (`[(x)]`). `element` and
+  `block` are containers. In a `.ts` file the inline template's symbols are listed under the
+  `template` symbol (one level deeper). `find` units: file level `element`; no member kinds (a tree
+  with one template ranks nothing, `ln(1/1)`).
+- Template symbols are usages, not declarations: a bare `<name>` position and `show <name>` skip them
+  when a declaration exists (`isTemplateSymbol` in `commands/position.ts`). In a template a name also
+  takes `-` (`pnyc-sparkline`).
+- Grammar missing: as for SCSS, with `Angular grammar not available: …`, `CODE_NAV_ANGULAR_GRAMMAR`,
+  `note: …; Angular template files not ranked`, and `note: …; templates not scanned` on a syntax scan.
+  Inline-template symbols are simply absent.
+
+Server:
+
+- Package: `CODE_NAV_ANGULAR_LS` (the package directory or its `index.js`), else
+  `<npm root -g>/@angular/language-server` (`npm root -g` run once per process; it honours a custom
+  npm prefix, unlike guessing from `node`'s path). Runtime: `node` on `PATH`, whose version must
+  satisfy the package's `engines.node` (21.2.25: `^20.19.0 || ^22.12.0 || >=24.0.0`). Missing either
+  makes every Angular slot `not available: <why>` (`angularLaunch()` in `src/tool/lsp/servers.ts`).
+- Slots: one per TypeScript root (`discoverTypescriptRoots`) whose directory, or an ancestor, has
+  `node_modules/@angular/core/package.json` — the server enables itself only for projects whose files
+  include `@angular/core` (`findAngularCore`, angular/angular
+  `vscode-ng-language-service/server/src/session.ts`). Restarted with typescript-language-server on a
+  TypeScript configuration change; gets the same `didOpen`/`didChange`/`didChangeWatchedFiles` for
+  `.ts` files and Angular templates under its workspace.
+- Launch: `node <index.js> --stdio --tsProbeLocations <project>,<package> --ngProbeLocations
+  <project>,<package>` (`language-servers.md` §Angular language server). `status`:
+  `server angular-language-server <workspace> pid <pid> ready|starting`.
+- Readiness: a project loads only when a file is opened, so after `initialize` the pool opens the
+  first component `.ts` (one with a `selector`) of the workspace, else a template, else any `.ts`, and
+  waits for the `angular/projectLoadingFinish` notification (exit or 600 s without it: not
+  available). Test app (~2,000 `.ts`, 549 templates): first answer `waited 4.0 s`; warm answers
+  milliseconds. Memory: about 1.5 GB RSS per slot (one `node` process, no children), on top of
+  typescript-language-server.
+- Routing:
+
+| Position | `refs` | `def` |
+|---|---|---|
+| template (`.html`, or inside an inline template) | Angular server, minus its own definition location | Angular server; empty → syntax answer |
+| `.ts` in an Angular slot | Angular server (adds template usages), else typescript-language-server with a note | Angular server first; empty or unavailable → typescript-language-server |
+| `.ts` outside a slot, on a component class or selector, pipe class, pipe name or a pipe's `transform` | as the row above, with the slot missing | typescript-language-server |
+
+  `impls`, `callers` and `trace` stay on typescript-language-server; on a template they exit 3
+  (`… is an Angular template, which has find, outline, show, refs and def`). On the selector string
+  of a decorator, `refs` asks about the class instead (the server answers only the string itself).
+- Pipes: a `| name` position (the identifier after a single `|`), a `@Pipe` class, its `name:` string
+  or its `transform` method all answer the same: server references of the pipe class (Angular, else
+  typescript-language-server, else the syntax scan of the class name) plus the syntax scan of every
+  `| name` in the templates. References are never asked on `transform` (Angular 21.2.25 returns every
+  pipe's `transform`, 1604 hits on the test app), and the server misses `| name` usages when asked on
+  the class.
+- Syntax answers (server missing or unavailable), each after
+  `note: angular-language-server not available (<reason>); <what>`:
+  `def` of a tag → the class whose `selector` names that element; of a `| name` → the pipe class; of
+  another name → its one TypeScript declaration in the index (several: exit 2). `refs` of a tag →
+  every `<tag>` open tag in the templates; of a pipe → as above; of another name with exactly one
+  TypeScript declaration in the index → the TypeScript reference scan plus every template identifier
+  of that name; otherwise exit 3 naming the server. Component properties (signal inputs) are not in
+  the index, so `refs` of `{{ prop() }}` without the server exits 3.
+
+Checked on a 2,000-file Angular 21 app (2026-10-28, server 21.2.25): `def` from `{{ listing() }}`,
+`<pnyc-sparkline>`, `[data]` and an inline template's `mode()` land on the component members; `def`
+of `| formatPrice` lands on the pipe's `transform`; `refs` of a signal input from `.ts` or `.html`
+gives 28 locations, 24 in templates; `refs SparklineComponent` gives both `<pnyc-sparkline>` tags and
+the two TypeScript uses; `refs FormatPricePipe` and `refs …:transform` give the 2 `| formatPrice`
+usages `rg` finds plus the import and `imports:` entry; `def` of a plain TypeScript call falls back to
+typescript-language-server; a template edit is in the next `refs`.
 
 ### GraphQL: root schema, documents and the selection parent type
 
@@ -562,15 +753,18 @@ configuration: each language is usable or not on its own, from what is installed
   `<language>: ready | syntax only (<missing>) | unavailable (<missing>)`. A missing check that
   costs only one feature leaves the language `ready (<feature lost>: <missing>)`.
 - Checks, in order: C# `csharp-ls`, `dotnet`; TypeScript `typescript-language-server`; GraphQL
-  `typescript-language-server` (only `trace` needs it: `ready (no trace: …)`); CSS
-  `vscode-css-language-server`; SCSS `scss-grammar`, `vscode-css-language-server`; Rust
+  `typescript-language-server` (only `trace` needs it: `ready (no trace: …)`); CSS nothing beyond
+  ast-grep (just the `CSS: ready` line); SCSS `scss-grammar`; Rust
   `rust-analyzer`, `cargo`, `rust-src` (missing: `ready (std not indexed: rust-src missing)`);
-  WGSL `wgsl-grammar`. Without ast-grep every language is `unavailable (ast-grep missing)`; a
+  WGSL `wgsl-grammar`; Angular `angular-grammar`, `node` (its `--version` must satisfy the server
+  package's `engines.node`, else `missing node: <path> is <version>, @angular/language-server needs
+  <range>`), `@angular/language-server` (`ok … <dir> (<version>, from CODE_NAV_ANGULAR_LS | npm root
+  -g)`; hint `npm i -g @angular/language-server`). Without ast-grep every language is `unavailable (ast-grep missing)`; a
   missing grammar makes its language unavailable; a missing language server or `dotnet` / `cargo`
   makes it `syntax only`.
 - Resolution is the daemon's: `astGrepExecutable()` (on Windows a `.cmd` shim is reported with its
   message), the server commands and `CODE_NAV_CSHARP_LS` / `CODE_NAV_TYPESCRIPT_LS` /
-  `CODE_NAV_RUST_ANALYZER` / `CODE_NAV_CSS_LS` overrides from `src/tool/lsp/servers.ts`, the grammar
+  `CODE_NAV_RUST_ANALYZER` overrides from `src/tool/lsp/servers.ts`, the grammar
   paths `wgslLibraryPath()` / `scssLibraryPath()` (`CODE_NAV_WGSL_GRAMMAR` / `CODE_NAV_SCSS_GRAMMAR`),
   and for `rust-src` the source rust-analyzer would get (`CODE_NAV_RUST_SRC`, the code-nav cache for
   the current `rustc`, else `<rustc --print sysroot>/lib/rustlib/src/rust/library`). A set override

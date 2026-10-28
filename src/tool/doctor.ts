@@ -3,7 +3,17 @@ import { join, resolve } from "node:path";
 import { astGrepExecutable } from "./index/astgrep.ts";
 import { SCSS_GRAMMAR_ENV, scssLibraryPath } from "./index/scss.ts";
 import { WGSL_GRAMMAR_ENV, defaultGrammarDir, wgslLibraryPath } from "./index/wgsl.ts";
-import { SERVER_COMMANDS, serverCommand, type ServerId } from "./lsp/servers.ts";
+import { ANGULAR_GRAMMAR_ENV, angularLibraryPath } from "./index/angular.ts";
+import {
+  ANGULAR_LS_HINT,
+  ANGULAR_LS_PACKAGE,
+  SERVER_COMMANDS,
+  angularPackage,
+  nodeRuntime,
+  satisfiesEngines,
+  serverCommand,
+  type ServerId,
+} from "./lsp/servers.ts";
 import { EXIT } from "./output.ts";
 import { IS_WINDOWS, resolveExecutable } from "./platform.ts";
 import { INSTALL_COMMAND, rustcCommand, sysrootSource } from "./rust-src.ts";
@@ -40,7 +50,6 @@ const SERVER_HINTS: Record<ServerId, string> = {
   csharp: "dotnet tool install -g csharp-ls",
   typescript: "npm i -g typescript-language-server typescript",
   rust: IS_MAC ? "rustup component add rust-analyzer or brew install rust-analyzer" : "rustup component add rust-analyzer",
-  css: "npm i -g vscode-langservers-extracted",
 };
 
 const DOTNET_HINT = "install the .NET SDK (https://dotnet.microsoft.com/download)";
@@ -112,6 +121,22 @@ function rustSrcCheck(): Check {
     : { what, role: "extra", found: null, hint };
 }
 
+function angularServerChecks(): Check[] {
+  const pkg = angularPackage();
+  const node = nodeRuntime();
+  const server: Check =
+    typeof pkg === "string"
+      ? { what: ANGULAR_LS_PACKAGE, role: "lsp", found: null, hint: `${pkg}; ${ANGULAR_LS_HINT}` }
+      : { what: ANGULAR_LS_PACKAGE, role: "lsp", found: `${pkg.dir} (${pkg.version}, from ${pkg.from})`, hint: "" };
+  const engines = typeof pkg === "string" ? null : pkg.engines;
+  let runtime: Check;
+  if (node === null) runtime = { what: "node", role: "lsp", found: null, hint: "install Node.js (https://nodejs.org)" };
+  else if (!satisfiesEngines(node.version, engines)) {
+    runtime = { what: "node", role: "lsp", found: null, hint: `${node.path} is ${node.version}, ${ANGULAR_LS_PACKAGE} needs ${engines}` };
+  } else runtime = { what: "node", role: "lsp", found: `${node.path} (${node.version})`, hint: "" };
+  return [runtime, server];
+}
+
 function missingNames(checks: Check[], role: Role): string[] {
   return checks.filter((c) => c.role === role && c.found === null).map((c) => c.what);
 }
@@ -133,10 +158,11 @@ export function diagnose(): DoctorReport {
     ["C#", [serverCheck("csharp", "lsp"), toolCheck("dotnet", DOTNET_HINT)], ""],
     ["TypeScript", [serverCheck("typescript", "lsp")], ""],
     ["GraphQL", [serverCheck("typescript", "extra")], "no trace"],
-    ["CSS", [serverCheck("css", "lsp")], ""],
-    ["SCSS", [grammarCheck("scss-grammar", scssLibraryPath(), SCSS_GRAMMAR_ENV), serverCheck("css", "lsp")], ""],
+    ["CSS", [], ""],
+    ["SCSS", [grammarCheck("scss-grammar", scssLibraryPath(), SCSS_GRAMMAR_ENV)], ""],
     ["Rust", [serverCheck("rust", "lsp"), toolCheck("cargo", CARGO_HINT), rustSrcCheck()], "std not indexed"],
     ["WGSL", [grammarCheck("wgsl-grammar", wgslLibraryPath(), WGSL_GRAMMAR_ENV)], ""],
+    ["Angular", [grammarCheck("angular-grammar", angularLibraryPath(), ANGULAR_GRAMMAR_ENV), ...angularServerChecks()], ""],
   ];
   return {
     astGrep,

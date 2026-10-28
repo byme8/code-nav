@@ -26,7 +26,7 @@ export async function bringUpToDate(index: SyntaxIndex, listeners: readonly Fres
   }
   for (const path of index.stamps.keys()) if (!current.has(path)) deleted.push(path);
   const t1 = performance.now();
-  if (created.length + changed.length + deleted.length > 0 || index.wgslRetryDue()) await index.apply(current, [...created, ...changed], deleted);
+  if (created.length + changed.length + deleted.length > 0 || index.grammarRetryDue()) await index.apply(current, [...created, ...changed], deleted);
   const configChanged = new Map<ConfigOwner, string[]>();
   for (const path of [...created, ...changed, ...deleted]) {
     const owner = configOwner(path);
