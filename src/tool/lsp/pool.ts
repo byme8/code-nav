@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { FreshnessReport } from "../daemon/freshness.ts";
+import { resolveExecutable } from "../platform.ts";
 import { LspClient, type WatchedFileChange } from "./client.ts";
 import { CSHARP_LS, TYPESCRIPT_LS } from "./servers.ts";
 import type { ServerRecord } from "../daemon/state.ts";
@@ -84,11 +85,6 @@ function executable(owner: Owner): string {
   const override = process.env[EXECUTABLE_ENV[owner]];
   if (override !== undefined && override !== "") return override;
   return owner === "csharp" ? CSHARP_LS : owner === "typescript" ? TYPESCRIPT_LS : RUST_ANALYZER;
-}
-
-function resolveExecutable(command: string): string | null {
-  if (command.includes("/")) return existsSync(command) ? command : null;
-  return Bun.which(command);
 }
 
 function depth(path: string): number {

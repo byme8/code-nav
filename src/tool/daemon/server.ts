@@ -4,6 +4,7 @@ import { runCommand, COMMANDS } from "../commands/index.ts";
 import { SyntaxIndex } from "../index/index.ts";
 import { ServerPool } from "../lsp/pool.ts";
 import { failure, success, type Reply } from "../output.ts";
+import { IS_WINDOWS } from "../platform.ts";
 import { bringUpToDate, type FreshnessListener, type FreshnessReport } from "./freshness.ts";
 import { PING, type Request } from "./protocol.ts";
 import { TOOL_VERSION, idleMs, readDaemonInfo, statePaths, type DaemonInfo, type ServerRecord } from "./state.ts";
@@ -143,7 +144,7 @@ export async function runDaemon(root: string): Promise<void> {
   process.on("uncaughtException", (e) => log(`uncaught: ${e.stack ?? String(e)}`));
   process.on("exit", () => pool.killAll());
 
-  rmSync(paths.socket, { force: true });
+  if (!IS_WINDOWS) rmSync(paths.socket, { force: true });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(paths.socket, () => resolve());

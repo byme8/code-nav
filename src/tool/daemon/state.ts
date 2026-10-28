@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { IS_WINDOWS, ipcPath } from "../platform.ts";
 
 export const TOOL_VERSION = "4c";
 export const DEFAULT_IDLE_MS = 30 * 60 * 1000;
@@ -40,12 +41,12 @@ export function resolveRoot(option: string | undefined, cwd: string): string {
 }
 
 export function statePaths(root: string): StatePaths {
-  const hash = createHash("sha256").update(root).digest("hex").slice(0, 16);
+  const hash = createHash("sha256").update(IS_WINDOWS ? root.toLowerCase() : root).digest("hex").slice(0, 16);
   const dir = join(tmpdir(), "code-nav", hash);
   return {
     hash,
     dir,
-    socket: join(dir, "daemon.sock"),
+    socket: ipcPath(dir, hash),
     info: join(dir, "daemon.json"),
     lock: join(dir, "start.lock"),
     log: join(dir, "daemon.log"),

@@ -1,4 +1,5 @@
 import { isAbsolute, relative } from "node:path";
+import { IS_WINDOWS, resolveExecutable } from "../platform.ts";
 import { declarationKinds, outlineRules, ruleText, type AgLanguage, type Rule, type RuleDoc } from "./rules.ts";
 import { implOwner, rustRuleText } from "./rust.ts";
 import { assignContainers, type Spanned, type ToolLanguage, type ToolSymbol } from "./symbols.ts";
@@ -6,7 +7,40 @@ import { addressSpaceKind, wgslConfigPath, wgslRuleText } from "./wgsl.ts";
 
 const DECLARATION_ID = "declaration";
 const BATCH_SIZE = 400;
+const WINDOWS_COMMAND_LINE_MAX = 32_767;
+const COMMAND_LINE_RESERVE = 2_048;
 const CONCURRENCY = 4;
+
+let astGrep: string | null = null;
+
+export function astGrepExecutable(): string {
+  if (astGrep !== null) return astGrep;
+  const resolved = resolveExecutable("ast-grep");
+  if (resolved === null) throw new Error("ast-grep not found on PATH");
+  if (IS_WINDOWS && !/\.exe$/i.test(resolved)) {
+    throw new Error(`ast-grep at ${resolved} is a script shim; install the native ast-grep.exe (cargo, scoop or winget)`);
+  }
+  astGrep = resolved;
+  return astGrep;
+}
+
+export function scanBatches(paths: string[], rules: string): string[][] {
+  const budget = IS_WINDOWS ? WINDOWS_COMMAND_LINE_MAX - COMMAND_LINE_RESERVE - 2 * rules.length : Infinity;
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let length = 0;
+  for (const path of paths) {
+    if (batch.length > 0 && (batch.length === BATCH_SIZE || length + path.length + 3 > budget)) {
+      batches.push(batch);
+      batch = [];
+      length = 0;
+    }
+    batch.push(path);
+    length += path.length + 3;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
+}
 
 function declarationRule(language: AgLanguage): Rule {
   const any: Rule[] = declarationKinds(language).map((kind) => ({ kind }));
@@ -96,7 +130,7 @@ export async function scanBatch(
 ): Promise<Map<string, StreamMatch[]>> {
   const proc = Bun.spawn(
     [
-      "ast-grep",
+      astGrepExecutable(),
       "scan",
       ...(config === null ? [] : ["--config", config]),
       "--inline-rules",
@@ -107,7 +141,7 @@ export async function scanBatch(
       ...["hidden", "dot", "exclude", "global", "parent", "vcs"].flatMap((t) => ["--no-ignore", t]),
       ...paths,
     ],
-    { cwd: root, stdout: "pipe", stderr: "pipe", stdin: "ignore" },
+    { cwd: root, stdout: "pipe", stderr: "pipe", stdin: "ignore", windowsHide: true },
   );
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   if (code !== 0 && out === "") throw new Error(`ast-grep scan failed (exit ${code}): ${err.trim().split("\n")[0] ?? ""}`);
@@ -133,8 +167,7 @@ export async function parseSyntaxFiles(
   rules: string = RULES,
   config: string | null = null,
 ): Promise<Map<string, ToolSymbol[]>> {
-  const batches: string[][] = [];
-  for (let i = 0; i < paths.length; i += BATCH_SIZE) batches.push(paths.slice(i, i + BATCH_SIZE));
+  const batches = scanBatches(paths, rules);
   const out = new Map<string, ToolSymbol[]>();
   let next = 0;
   const worker = async (): Promise<void> => {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 declare const CODE_NAV_GRAMMAR_DIR: string | undefined;
 
-export const WGSL_LIBRARY_FILE = process.platform === "darwin" ? "wgsl.dylib" : "wgsl.so";
+export const WGSL_LIBRARY_FILE = process.platform === "darwin" ? "wgsl.dylib" : process.platform === "win32" ? "wgsl.dll" : "wgsl.so";
 export const WGSL_GRAMMAR_ENV = "CODE_NAV_WGSL_GRAMMAR";
 export const WGSL_BUILD_COMMAND = "bun src/tool/grammars.ts";
 const AG_LANGUAGE = "wgsl";

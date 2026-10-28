@@ -3,6 +3,7 @@ import { closeSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Reply } from "../output.ts";
+import { IS_WINDOWS, commandLineOf, killTree } from "../platform.ts";
 import { PING, TransportError, send } from "./protocol.ts";
 import { TOOL_VERSION, readDaemonInfo, statePaths, type DaemonInfo, type StatePaths } from "./state.ts";
 
@@ -29,40 +30,22 @@ export function isAlive(pid: number): boolean {
 }
 
 function isOurDaemon(pid: number, paths: StatePaths): boolean {
-  const ps = Bun.spawnSync(["ps", "-o", "command=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore" });
-  const command = ps.stdout.toString();
+  const command = commandLineOf(pid);
   return / daemon /.test(command) && command.includes(paths.hash);
-}
-
-function killGroup(pid: number): void {
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      return;
-    }
-  }
-}
-
-function commandOf(pid: number): string {
-  const ps = Bun.spawnSync(["ps", "-o", "command=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore" });
-  return ps.stdout.toString();
 }
 
 export function killServers(info: DaemonInfo | null): void {
   for (const server of info?.servers ?? []) {
     if (!isAlive(server.pid)) continue;
-    if (!commandOf(server.pid).includes(basename(server.command))) continue;
-    killGroup(server.pid);
+    if (!commandLineOf(server.pid).includes(basename(server.command))) continue;
+    killTree(server.pid);
   }
 }
 
 export function killDaemonTree(root: string): void {
   const paths = statePaths(root);
   const info = readDaemonInfo(paths);
-  if (info !== null && isAlive(info.pid) && isOurDaemon(info.pid, paths)) killGroup(info.pid);
+  if (info !== null && isAlive(info.pid) && isOurDaemon(info.pid, paths)) killTree(info.pid);
   killServers(info);
 }
 
@@ -88,9 +71,9 @@ async function ping(paths: StatePaths, timeoutMs: number): Promise<Ping> {
 
 function killStale(paths: StatePaths): void {
   const info = readDaemonInfo(paths);
-  if (info !== null && isAlive(info.pid) && isOurDaemon(info.pid, paths)) killGroup(info.pid);
+  if (info !== null && isAlive(info.pid) && isOurDaemon(info.pid, paths)) killTree(info.pid);
   killServers(info);
-  rmSync(paths.socket, { force: true });
+  if (!IS_WINDOWS) rmSync(paths.socket, { force: true });
   rmSync(paths.info, { force: true });
 }
 
@@ -145,6 +128,7 @@ async function start(root: string, paths: StatePaths): Promise<Ping | null> {
     const child = spawn(command!, [...prefix, "daemon", root, paths.hash], {
       cwd: root,
       detached: true,
+      windowsHide: true,
       stdio: ["ignore", out, out],
       env: process.env,
     });
@@ -206,20 +190,20 @@ export async function stop(root: string): Promise<string> {
   } catch (e) {
     if (!(e instanceof TransportError)) throw e;
     if (info === null || !isAlive(info.pid) || !isOurDaemon(info.pid, paths)) {
-      rmSync(paths.dir, { recursive: true, force: true });
+      rmSync(paths.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       return "no daemon running";
     }
-    killGroup(info.pid);
+    killTree(info.pid);
     killServers(info);
     await waitForExit(info.pid, STOP_WAIT_MS);
-    rmSync(paths.dir, { recursive: true, force: true });
+    rmSync(paths.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     return `daemon ${info.pid} killed (${e.reason})`;
   }
   if (info !== null && !(await waitForExit(info.pid, STOP_WAIT_MS))) {
-    killGroup(info.pid);
+    killTree(info.pid);
     killServers(readDaemonInfo(paths) ?? info);
     await waitForExit(info.pid, STOP_WAIT_MS);
-    rmSync(paths.dir, { recursive: true, force: true });
+    rmSync(paths.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     return `daemon ${info.pid} killed (did not exit after stop)`;
   }
   return "daemon stopped";

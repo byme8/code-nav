@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { EXIT } from "./output.ts";
 import { ensureDaemon, request, status, stop } from "./daemon/lifecycle.ts";
 import { runDaemon } from "./daemon/server.ts";

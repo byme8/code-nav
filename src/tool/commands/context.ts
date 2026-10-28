@@ -32,13 +32,14 @@ export function rootRelative(root: string, arg: string): string {
     if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) throw new ToolError(failure(`path outside the root: ${arg}`));
     return rel.split(sep).join("/");
   }
-  const rel = (arg.startsWith("./") ? arg.slice(2) : arg).split(sep).join("/");
+  const posix = arg.split(sep).join("/");
+  const rel = posix.startsWith("./") ? posix.slice(2) : posix;
   if (rel.split("/").includes("..")) throw new ToolError(failure(`path outside the root: ${arg}`));
   return rel;
 }
 
 export function looksLikePath(root: string, arg: string): boolean {
-  return arg.includes("/") || sourceLanguage(arg) !== null || existsSync(join(root, arg));
+  return arg.includes("/") || arg.includes(sep) || sourceLanguage(arg) !== null || existsSync(join(root, arg));
 }
 
 export function indexedFile(ctx: CommandContext, arg: string): IndexedFile {

@@ -6,6 +6,7 @@ import { compileTool } from "./compile.ts";
 import { stop } from "./daemon/lifecycle.ts";
 import { TOOL_VERSION } from "./daemon/state.ts";
 import { wgslLibraryPath } from "./index/wgsl.ts";
+import { EXE_SUFFIX, IS_WINDOWS } from "./platform.ts";
 
 export const PERMISSION = "Bash(code-nav:*)";
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -238,14 +239,15 @@ async function main(): Promise<number> {
   }
 
   mkdirSync(args.binDir, { recursive: true });
-  const binary = join(args.binDir, "code-nav");
-  const temporary = join(args.binDir, `.code-nav.install-${process.pid}.tmp`);
+  const binary = join(args.binDir, `code-nav${EXE_SUFFIX}`);
+  const temporary = join(args.binDir, `.code-nav.install-${process.pid}.tmp${EXE_SUFFIX}`);
   const failure = await compileTool(temporary, "pipe");
   if (failure !== null) {
     rmSync(temporary, { force: true });
     console.error(`error: build failed, ${binary} left untouched: ${failure.message}`);
     return 1;
   }
+  const stoppedBeforeReplace = IS_WINDOWS ? await stopAllDaemons() : 0;
   renameSync(temporary, binary);
   const commit = gitCommit();
   console.log(`binary: ${binary} (version ${TOOL_VERSION}${commit === null ? "" : `, commit ${commit}`})`);
@@ -260,7 +262,7 @@ async function main(): Promise<number> {
   const permission = installPermission(join(args.claudeHome, "settings.json"));
   console.log(permission.line);
 
-  const daemons = await stopAllDaemons();
+  const daemons = stoppedBeforeReplace + (await stopAllDaemons());
   console.log(`daemons: ${daemons} stopped`);
 
   const missing = missingOptional();

@@ -2,6 +2,7 @@ import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { extname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Subprocess } from "bun";
+import { IS_WINDOWS, killTree, spawnArgv } from "../platform.ts";
 
 export interface Position {
   path: string;
@@ -113,12 +114,15 @@ export class LspClient {
     this.log = options.log;
     this.onNotification = options.onNotification;
     this.configuration = options.configuration;
-    this.proc = Bun.spawn(options.command, {
+    const spawned = spawnArgv(options.command);
+    this.proc = Bun.spawn(spawned.argv, {
       cwd: options.cwd,
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
       detached: true,
+      windowsHide: true,
+      windowsVerbatimArguments: spawned.verbatim,
       env: { ...process.env, ...options.env },
     });
     this.pid = this.proc.pid;
@@ -317,6 +321,10 @@ export class LspClient {
   }
 
   kill(): void {
+    if (IS_WINDOWS) {
+      if (!this.exited) killTree(this.pid);
+      return;
+    }
     for (const target of this.exited ? [-this.pid] : [-this.pid, this.pid]) {
       try {
         process.kill(target, "SIGKILL");

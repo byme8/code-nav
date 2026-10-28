@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultGrammarDir, WGSL_LIBRARY_FILE } from "./index/wgsl.ts";
+import { IS_WINDOWS } from "./platform.ts";
 
 export const WGSL_GRAMMAR_REPOSITORY = "https://github.com/tree-sitter-grammars/tree-sitter-wgsl-bevy.git";
 export const WGSL_GRAMMAR_COMMIT = "d9306a798ede627001a8e5752f775858c8edd7e4";
@@ -21,7 +22,7 @@ export function buildWgslGrammar(outDir: string = defaultGrammarDir()): string {
     if (head !== WGSL_GRAMMAR_COMMIT) throw new Error(`HEAD is ${head}, expected ${WGSL_GRAMMAR_COMMIT}`);
     const sources = ["src/parser.c", ...(existsSync(join(source, "src", "scanner.c")) ? ["src/scanner.c"] : [])];
     const built = join(work, WGSL_LIBRARY_FILE);
-    run(["clang", "-shared", "-fPIC", "-O2", "-I", "src", "-o", built, ...sources], source);
+    run(["clang", "-shared", ...(IS_WINDOWS ? [] : ["-fPIC"]), "-O2", "-I", "src", "-o", built, ...sources], source);
     mkdirSync(outDir, { recursive: true });
     const target = join(outDir, WGSL_LIBRARY_FILE);
     renameSync(built, target);

@@ -1,4 +1,4 @@
-import { scanBatch } from "../index/astgrep.ts";
+import { scanBatch, scanBatches } from "../index/astgrep.ts";
 import { referenceRules, ruleText } from "../index/rules.ts";
 import { rustReferenceRuleText } from "../index/rust.ts";
 import { LineTexts, groupedLines, lspReferences, requireServerLanguage } from "../lsp/answer.ts";
@@ -10,7 +10,6 @@ import { compareBytes, type Command, type CommandContext } from "./context.ts";
 import { POSITION_FORMS, declarationsNamed, describePosition, parsePosition, type ResolvedPosition } from "./position.ts";
 
 const USAGE = `usage: code-nav refs [--schema <path>] ${POSITION_FORMS}`;
-const SCAN_BATCH = 400;
 
 async function syntaxReferences(ctx: CommandContext, position: ResolvedPosition, unavailable: ServerUnavailable): Promise<Reply> {
   const language = requireServerLanguage("refs", position);
@@ -20,8 +19,8 @@ async function syntaxReferences(ctx: CommandContext, position: ResolvedPosition,
   const rules = language === "rust" ? rustReferenceRuleText(position.name) : ruleText(referenceRules(language, position.name));
   const paths = ctx.index.filesOf(new Set([language])).map((f) => f.path);
   const locations: { path: string; line: number; column: number }[] = [];
-  for (let i = 0; i < paths.length; i += SCAN_BATCH) {
-    for (const [path, matches] of await scanBatch(ctx.root, paths.slice(i, i + SCAN_BATCH), rules)) {
+  for (const batch of scanBatches(paths, rules)) {
+    for (const [path, matches] of await scanBatch(ctx.root, batch, rules)) {
       for (const m of matches) {
         const line = m.range.start.line + 1;
         const column = m.charCount.leading + 1;

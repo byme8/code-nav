@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { compileTool } from "./compile.ts";
+import { EXE_SUFFIX } from "./platform.ts";
 
 const outDir = process.argv[2];
 if (outDir === undefined) {
@@ -9,7 +10,7 @@ if (outDir === undefined) {
 }
 const dir = resolve(outDir);
 mkdirSync(dir, { recursive: true });
-const outfile = join(dir, "code-nav");
+const outfile = join(dir, `code-nav${EXE_SUFFIX}`);
 const failure = await compileTool(outfile, "inherit");
 if (failure !== null) process.exit(failure.code);
 console.log(outfile);

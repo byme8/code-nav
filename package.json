@@ -1,7 +1,11 @@
 {
   "name": "code-nav",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "code-nav": "src/tool/cli.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test"
