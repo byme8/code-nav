@@ -34,10 +34,10 @@ ok typescript-language-server /opt/homebrew/bin/typescript-language-server
 TypeScript: ready
 …
 CSS: ready
-missing scss-grammar: /Users/me/.bun/install/global/node_modules/code-nav/data/grammars/scss.dylib not found; bun /Users/me/.bun/install/global/node_modules/code-nav/src/tool/grammars.ts (needs git and clang on PATH)
-SCSS: unavailable (scss-grammar missing)
+ok scss-grammar /Users/me/.bun/install/global/node_modules/code-nav/prebuilt/darwin/scss.dylib
+SCSS: ready
 …
-ok angular-grammar /Users/me/.bun/install/global/node_modules/code-nav/data/grammars/angular.dylib
+ok angular-grammar /Users/me/.bun/install/global/node_modules/code-nav/prebuilt/darwin/angular.dylib
 ok node /opt/homebrew/bin/node (24.11.0)
 missing @angular/language-server: @angular/language-server not in /opt/homebrew/lib/node_modules; npm i -g @angular/language-server
 Angular: syntax only (@angular/language-server missing)
@@ -54,10 +54,10 @@ Angular: syntax only (@angular/language-server missing)
 | TypeScript / TSX | — | `typescript-language-server` + `typescript` (and `npm ci` in the project) |
 | GraphQL | — | `trace` needs `typescript-language-server`; `refs` / `def` need nothing else |
 | CSS | — | — (no language server; `refs` / `def` from syntax trees) |
-| SCSS | the SCSS grammar (built once, below) | — (no language server; `refs` / `def` from syntax trees) |
+| SCSS | the SCSS grammar (shipped, below) | — (no language server; `refs` / `def` from syntax trees) |
 | Rust | — | `rust-analyzer`, `cargo`; std navigation needs `code-nav install rust-src` |
-| WGSL | the WGSL grammar (built once, below) | — (no language server) |
-| Angular templates | the Angular grammar (built once, below) | `@angular/language-server` + `node` (and `npm ci` in the project); without it `refs` / `def` fall back to syntax |
+| WGSL | the WGSL grammar (shipped, below) | — (no language server) |
+| Angular templates | the Angular grammar (shipped, below) | `@angular/language-server` + `node` (and `npm ci` in the project); without it `refs` / `def` fall back to syntax |
 
 Install commands:
 
@@ -73,13 +73,15 @@ The Angular server is found at `CODE_NAV_ANGULAR_LS`, else in `npm root -g`; it 
 
 ### Grammars (WGSL, SCSS, Angular)
 
-WGSL, SCSS and Angular templates use tree-sitter grammars compiled on your machine (needs `git` and `clang` on `PATH`, network once):
+WGSL, SCSS and Angular templates use tree-sitter grammars. Prebuilt libraries ship in the package's `prebuilt/` for macOS (universal arm64 + x86_64), Linux x64 / arm64 (glibc 2.17+) and Windows x64 / arm64, so nothing is compiled on install.
+
+On another platform, or to rebuild from source (needs `git` and `clang` on `PATH`, network once):
 
 ```sh
-bun ~/.bun/install/global/node_modules/code-nav/src/tool/grammars.ts
+code-nav install grammars
 ```
 
-On Windows: `bun %USERPROFILE%\.bun\install\global\node_modules\code-nav\src\tool\grammars.ts`. `code-nav doctor` prints the exact path for your install. The libraries land in the package's `data/grammars/`; `CODE_NAV_WGSL_GRAMMAR` / `CODE_NAV_SCSS_GRAMMAR` / `CODE_NAV_ANGULAR_GRAMMAR` point at a library elsewhere.
+It writes the package's `data/grammars/`, which takes precedence over `prebuilt/`; `CODE_NAV_WGSL_GRAMMAR` / `CODE_NAV_SCSS_GRAMMAR` / `CODE_NAV_ANGULAR_GRAMMAR` point at a library elsewhere. Maintainers regenerate `prebuilt/` with `bun src/tool/grammars.ts --prebuilt` (clang for macOS, `zig` for Linux and Windows).
 
 ### Overrides
 

@@ -16,7 +16,7 @@ const USAGE = [
   "  impls | callers <path>:<line>:<col> | <path>:<line> <name> | <name> | <Owner.name>",
   "  trace [--schema <path>] <path>:<line>:<col> | <path>:<line> <name> | <Type.Property>",
   "  status | stop",
-  "  install rust-src",
+  "  install rust-src | grammars",
   "  doctor",
   "  uninstall [--bin-dir <dir>] [--claude-home <dir>]",
 ];

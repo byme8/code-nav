@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { escapeRegex } from "./declarations.ts";
-import { customLanguageConfigPath, defaultGrammarDir, missingGrammarMessage } from "./wgsl.ts";
+import { customLanguageConfigPath, grammarLibraryPath, missingGrammarMessage } from "./wgsl.ts";
 
 type Rule = Record<string, unknown>;
 
@@ -11,7 +11,7 @@ export const ANGULAR_GRAMMAR_ENV = "CODE_NAV_ANGULAR_GRAMMAR";
 const AG_LANGUAGE = "angular";
 
 export function angularLibraryPath(): string {
-  return process.env[ANGULAR_GRAMMAR_ENV] || join(defaultGrammarDir(), ANGULAR_LIBRARY_FILE);
+  return grammarLibraryPath(ANGULAR_LIBRARY_FILE, ANGULAR_GRAMMAR_ENV);
 }
 
 export function angularGrammarProblem(): string | null {

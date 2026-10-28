@@ -7,7 +7,7 @@ declare const CODE_NAV_GRAMMAR_DIR: string | undefined;
 
 export const WGSL_LIBRARY_FILE = process.platform === "darwin" ? "wgsl.dylib" : process.platform === "win32" ? "wgsl.dll" : "wgsl.so";
 export const WGSL_GRAMMAR_ENV = "CODE_NAV_WGSL_GRAMMAR";
-export const WGSL_BUILD_COMMAND = "bun src/tool/grammars.ts";
+export const WGSL_BUILD_COMMAND = "code-nav install grammars";
 const AG_LANGUAGE = "wgsl";
 
 type Rule = Record<string, unknown>;
@@ -16,8 +16,23 @@ export function defaultGrammarDir(): string {
   return typeof CODE_NAV_GRAMMAR_DIR === "string" ? CODE_NAV_GRAMMAR_DIR : join(import.meta.dir, "..", "..", "..", "data", "grammars");
 }
 
+export const PREBUILT_PLATFORM = process.platform === "darwin" ? "darwin" : `${process.platform}-${process.arch}`;
+
+export function prebuiltGrammarDir(platform: string = PREBUILT_PLATFORM): string {
+  return join(defaultGrammarDir(), "..", "..", "prebuilt", platform);
+}
+
+export function grammarLibraryPath(file: string, env: string): string {
+  const override = process.env[env];
+  if (override) return override;
+  const built = join(defaultGrammarDir(), file);
+  if (existsSync(built)) return built;
+  const prebuilt = join(prebuiltGrammarDir(), file);
+  return existsSync(prebuilt) ? prebuilt : built;
+}
+
 export function wgslLibraryPath(): string {
-  return process.env[WGSL_GRAMMAR_ENV] || join(defaultGrammarDir(), WGSL_LIBRARY_FILE);
+  return grammarLibraryPath(WGSL_LIBRARY_FILE, WGSL_GRAMMAR_ENV);
 }
 
 export function missingGrammarMessage(library: string, label = "WGSL", env = WGSL_GRAMMAR_ENV): string {

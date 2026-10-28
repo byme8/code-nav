@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { astGrepExecutable } from "./index/astgrep.ts";
 import { SCSS_GRAMMAR_ENV, scssLibraryPath } from "./index/scss.ts";
-import { WGSL_GRAMMAR_ENV, defaultGrammarDir, wgslLibraryPath } from "./index/wgsl.ts";
+import { PREBUILT_PLATFORM, WGSL_GRAMMAR_ENV, prebuiltGrammarDir, wgslLibraryPath } from "./index/wgsl.ts";
 import { ANGULAR_GRAMMAR_ENV, angularLibraryPath } from "./index/angular.ts";
 import {
   ANGULAR_LS_HINT,
@@ -55,12 +55,9 @@ const SERVER_HINTS: Record<ServerId, string> = {
 const DOTNET_HINT = "install the .NET SDK (https://dotnet.microsoft.com/download)";
 const CARGO_HINT = IS_MAC ? "install Rust with rustup (https://rustup.rs) or brew install rust" : "install Rust with rustup (https://rustup.rs)";
 
-export function grammarsScript(): string {
-  return resolve(defaultGrammarDir(), "..", "..", "src", "tool", "grammars.ts");
-}
-
 function grammarHint(): string {
-  return `bun ${grammarsScript()} (needs git and clang on PATH)`;
+  const prebuilt = existsSync(prebuiltGrammarDir()) ? "" : `no prebuilt libraries for ${PREBUILT_PLATFORM}; `;
+  return `${prebuilt}code-nav install grammars (needs git and clang on PATH)`;
 }
 
 function runs(argv: string[]): string | null {

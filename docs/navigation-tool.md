@@ -31,8 +31,16 @@ Less is not supported.
 - The daemon is the same program with the hidden `daemon <root> <hash>` subcommand; nothing else
   starts it.
 - Runtime dependency: the `ast-grep` CLI (0.45.3) on `PATH`, run by the daemon only.
-- Grammars: `bun src/tool/grammars.ts` (network; never a test) builds the WGSL, SCSS and Angular
-  grammars, one line per library with its size and sha256.
+- Grammars: `bun src/tool/grammars.ts` or `code-nav install grammars` (network; never a test) builds
+  the WGSL, SCSS and Angular grammars for this machine into `data/grammars/`, one line per library
+  with its size and sha256. `bun src/tool/grammars.ts --prebuilt` builds every grammar for every
+  shipped platform into the tracked `prebuilt/<platform>/` (`PREBUILT_TARGETS`): `darwin` is one
+  universal arm64 + x86_64 library from `clang -arch arm64 -arch x86_64 -mmacosx-version-min=11.0`;
+  `linux-x64` / `linux-arm64` come from `zig cc -target <arch>-linux-gnu.2.17`, `win32-x64` /
+  `win32-arm64` from `zig cc -target <arch>-windows-gnu`. Regenerate them whenever a grammar pin
+  changes. The tool takes a grammar library from its `CODE_NAV_*_GRAMMAR` variable if set, else from
+  `data/grammars/` if the file is there, else from `prebuilt/<platform>/` (`darwin`, else
+  `<process.platform>-<process.arch>`), so a package install needs no compiler.
 - WGSL grammar: `bun src/tool/grammars.ts` shallow-clones
   tree-sitter-grammars/tree-sitter-wgsl-bevy at commit `d9306a798ede627001a8e5752f775858c8edd7e4`
   (tag `v0.1.4`; WGSL plus Bevy-style `#import`/`#define_import_path`/`#ifdef`/`#ifndef`/`#else`/`#endif`)
@@ -316,7 +324,7 @@ Per file: language, stamp, and symbols `{ kind, name, start, end, nameLine, name
   recovery cut a function short or swallow the declarations after it (§WGSL demo).
 - WGSL grammar missing (or failing to load): every `.wgsl` file stays in the index without symbols,
   and `outline`/`show <path> …` of a `.wgsl` file and `find --lang wgsl` exit 3 with
-  `error: WGSL grammar not available: <library> not found (build it with \`bun src/tool/grammars.ts\`,
+  `error: WGSL grammar not available: <library> not found (build it with \`code-nav install grammars\`,
   or set CODE_NAV_WGSL_GRAMMAR)` (a library that does not load: `WGSL grammar not usable: <library>:
   <ast-grep error> (rebuild it with …)`). `find` without `--lang` ranks the other languages as
   usual and, when the tree has `.wgsl` files, prints `note: <that message>; WGSL files not ranked`
@@ -770,8 +778,9 @@ configuration: each language is usable or not on its own, from what is installed
   the current `rustc`, else `<rustc --print sysroot>/lib/rustlib/src/rust/library`). A set override
   that does not resolve is named in the hint.
 - Hints follow `process.platform` (ast-grep: `brew` on macOS; `cargo install ast-grep --locked`,
-  `scoop` or `winget` on Windows); a grammar's hint is `bun <absolute path of the package's
-  src/tool/grammars.ts>`, which needs `git` and `clang`.
+  `scoop` or `winget` on Windows); a grammar's hint is `code-nav install grammars`, which needs `git` and
+  `clang`, prefixed with `no prebuilt libraries for <platform>;` when `prebuilt/<platform>/` does not
+  exist.
 - Exit 0 when ast-grep is usable, whatever the languages; 1 when it is not; 3 with arguments.
   `install-global.ts` uses the same checks (`diagnose()`).
 

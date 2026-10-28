@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildAllGrammars } from "./grammars.ts";
 import { EXIT } from "./output.ts";
 import {
   DEFAULT_RUST_DIST,
@@ -12,7 +13,7 @@ import {
   versionDir,
 } from "./rust-src.ts";
 
-export const INSTALL_USAGE = "usage: code-nav install rust-src";
+export const INSTALL_USAGE = "usage: code-nav install rust-src | grammars";
 const PARTIAL = /^\.partial-(\d+)$/;
 
 type Out = (line: string) => void;
@@ -167,6 +168,16 @@ function fetchDependencies(library: string, alreadyInstalled: boolean, out: Out)
 }
 
 export async function install(args: string[], out: Out): Promise<number> {
+  if (args.length === 1 && args[0] === "grammars") {
+    try {
+      await buildAllGrammars(out);
+      out("a running daemon picks the grammars up after `code-nav stop`");
+      return EXIT.success;
+    } catch (e) {
+      out(`error: ${(e as Error).message}`);
+      return EXIT.error;
+    }
+  }
   if (args.length !== 1 || args[0] !== "rust-src") {
     out(`error: ${INSTALL_USAGE}`);
     return EXIT.error;
