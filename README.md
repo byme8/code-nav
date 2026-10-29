@@ -14,7 +14,7 @@ Requires [Bun](https://bun.sh) (tested with 1.4) and [ast-grep](https://ast-grep
 
 ```sh
 bun add -g github:byme8/code-nav
-code-nav install // or code-nav install
+code-nav install // or code-nav doctor
 ```
 
 `bun add -g` links `code-nav` into Bun's global bin directory (`~/.bun/bin`, on Windows `%USERPROFILE%\.bun\bin`); make sure it is on `PATH`. There is no build step: the command runs the TypeScript source with Bun.
